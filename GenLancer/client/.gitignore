@@ -36,3 +36,16 @@ server/.env
 *.njsproj
 *.sln
 *.sw?
+# Local Dependencies and Builds
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Client-side Environmental Keys
+.env
+.env.production
+.env.development
+
+# System logs
+npm-debug.log*

@@ -2,8 +2,10 @@
   "name": "genlancer-monorepo",
   "version": "1.0.0",
   "description": "Root orchestrator for GenLancer client and server",
+  "type": "module",
   "main": "server/server.js",
   "scripts": {
+    "seed": "node scripts/seedDatabase.js",
     "install:all": "npm install && npm install --prefix client && npm install --prefix server",
     "server": "npm run dev --prefix server",
     "client": "npm run dev --prefix client",

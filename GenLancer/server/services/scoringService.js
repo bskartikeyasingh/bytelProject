@@ -331,6 +331,46 @@ class ScoringService {
       is_demo: Boolean(creator.is_demo || creator.status === 'demo_unverified')
     };
   }
+
+  /**
+   * Calculate comprehensive AI Creator Score (0-100) based on profile completeness and portfolio artifacts
+   * @param {Object} profile 
+   * @param {Array} portfolioItems 
+   * @returns {number} Score between 70 and 100
+   */
+  calculateScore(profile = {}, portfolioItems = []) {
+    let score = 70; // Baseline score
+    const skills = Array.isArray(profile.skills) ? profile.skills : [];
+    const tools = Array.isArray(profile.tools) ? profile.tools : (Array.isArray(profile.ai_tools_models) ? profile.ai_tools_models : []);
+    const items = Array.isArray(portfolioItems) ? portfolioItems : [];
+
+    // Profile completeness: skills (+2 each, max 10)
+    score += Math.min(10, skills.length * 2);
+
+    // AI Tools and models: (+2 each, max 10)
+    score += Math.min(10, tools.length * 2);
+
+    // Portfolio artifact evidence: (+3 each, max 9)
+    score += Math.min(9, items.length * 3);
+
+    // Bio / description quality
+    if (profile.bio && profile.bio.length > 20) {
+      score += 3;
+    }
+
+    // Specialization set
+    if (profile.specialization) {
+      score += 2;
+    }
+
+    // Hourly rate set
+    if (profile.hourly_rate || profile.hourlyRate || profile.hourly_rate_usd) {
+      score += 2;
+    }
+
+    // Cap at 98 (100 reserved for verified audit)
+    return Math.min(profile.is_verified ? 100 : 98, Math.max(70, Math.round(score)));
+  }
 }
 
 export const scoringService = new ScoringService();

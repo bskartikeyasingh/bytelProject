@@ -56,10 +56,13 @@ export default function VerificationBadge({
   // Score Badge - only render if a valid score is supplied
   if (effectiveStatus === 'score' || type === 'score' || type === 'ai_creator_score') {
     if (score == null) return null;
+    const formattedScore = String(score).includes('/') || score === 'Calculating...'
+      ? score
+      : `${score}/100`;
     return (
       <span className={`inline-flex items-center gap-1 rounded-full font-black bg-gradient-to-r from-[#FF6B00] to-amber-500 text-white shadow-xs tracking-tight ${sizeClasses} ${className}`}>
         <Sparkles className={`${iconSizes} text-white shrink-0`} />
-        <span>AI Score: {score}/100</span>
+        <span>AI Score: {formattedScore}</span>
       </span>
     );
   }

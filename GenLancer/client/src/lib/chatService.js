@@ -1,4 +1,4 @@
-import { supabase, isSupabaseConfigured, authFetch } from './supabase';
+import { supabase, isSupabaseConfigured, authFetch, getAccessToken } from './supabase';
 import { apiUrl } from './apiConfig';
 
 /**
@@ -19,10 +19,17 @@ export async function sendChatMessage(requestId, senderId, senderRole, textConte
     return { success: false, error: 'Message exceeds maximum length of 2000 characters' };
   }
 
-  const messageId = typeof crypto !== 'undefined' && crypto.randomUUID 
-    ? crypto.randomUUID() 
-    : `msg-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+function generateUUID() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
 
+  const messageId = generateUUID();
   const now = new Date().toISOString();
 
   const payload = {
@@ -102,7 +109,40 @@ export async function fetchChatMessagesResult(requestId) {
 
   // Attempt 2: Express Server API endpoint /api/messages/:requestId with Bearer token
   try {
-    const res = await authFetch(apiUrl(`/api/messages/${encodeURIComponent(requestId)}`));
+    // Resolve token from localStorage directly or active session
+    let token = localStorage.getItem("token");
+    if (!token || token === "undefined" || token === "null") {
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith("sb-") && k.endsWith("-auth-token")) {
+            token = JSON.parse(localStorage.getItem(k) || "{}")?.access_token;
+            if (token) break;
+          }
+        }
+      } catch (_) {}
+    }
+    if (!token || token === "undefined" || token === "null") {
+      token = await getAccessToken();
+    }
+
+    const headers = {
+      "Content-Type": "application/json"
+    };
+
+    if (token && token !== "undefined" && token !== "null") {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+
+    const res = await fetch(apiUrl(`/api/messages/${encodeURIComponent(requestId)}`), {
+      method: "GET",
+      headers
+    });
+
+    if (res.status === 401) {
+      console.error("401 Unauthorized: Check if token exists in localStorage:", token);
+    }
+
     if (res.ok) {
       const result = await res.json();
       return { 
@@ -115,7 +155,7 @@ export async function fetchChatMessagesResult(requestId) {
     return { 
       success: false, 
       data: [], 
-      error: errData.error || `Server responded with ${res.status}` 
+      error: errData.error || errData.message || `Server responded with ${res.status}` 
     };
   } catch (err) {
     return { 
@@ -135,3 +175,48 @@ export async function fetchChatMessages(requestId) {
   const result = await fetchChatMessagesResult(requestId);
   return result.data || [];
 }
+
+/**
+ * Subscribe to realtime incoming messages for a specific requestId
+ * @param {string} requestId 
+ * @param {(message: any) => void} onMessageReceived 
+ * @returns {() => void} Unsubscribe function
+ */
+export function subscribeToMessages(requestId, onMessageReceived) {
+  if (!isSupabaseConfigured || !supabase || !requestId) {
+    return () => {};
+  }
+
+  try {
+    const channelName = `room:${requestId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+    const channel = supabase
+      .channel(channelName)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `request_id=eq.${requestId}`
+        },
+        (payload) => {
+          if (payload && payload.new && typeof onMessageReceived === 'function') {
+            onMessageReceived(payload.new);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      try {
+        supabase.removeChannel(channel);
+      } catch (err) {
+        console.warn('Error removing realtime channel:', err);
+      }
+    };
+  } catch (err) {
+    console.warn('Failed to subscribe to realtime channel:', err);
+    return () => {};
+  }
+}
+

@@ -9,12 +9,17 @@ import {
   Hash, 
   Layers, 
   Ratio, 
-  ExternalLink 
+  ExternalLink,
+  Wrench,
+  Tag,
+  FileText,
+  AlertCircle
 } from 'lucide-react';
-import { VerifiedWorkflowBadge, CertifiedPipelineBadge, AICreatorScoreBadge } from './VerificationBadge';
+import VerificationBadge, { VerifiedWorkflowBadge, CertifiedPipelineBadge, AICreatorScoreBadge } from './VerificationBadge';
 import { resolvePoster, isLikelyVideo } from '../../lib/mediaAssets';
+import ErrorBoundary from './ErrorBoundary';
 
-export default function PromptInspectorModal({ isOpen, onClose, item }) {
+function PromptInspectorContent({ isOpen, onClose, item }) {
   const [copiedPrompt, setCopiedPrompt] = useState(false);
   const [copiedSeed, setCopiedSeed] = useState(false);
 
@@ -29,20 +34,44 @@ export default function PromptInspectorModal({ isOpen, onClose, item }) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
+  // Reset copy states when item changes or modal closes
+  useEffect(() => {
+    setCopiedPrompt(false);
+    setCopiedSeed(false);
+  }, [item, isOpen]);
+
   if (!isOpen || !item) return null;
 
   // Normalize item fields across creator profiles and portfolio items
   const title = item.title || item.name || 'Generative Workflow Spec';
-  const mediaUrl = item.mediaUrl || item.sampleMedia || item.media_url;
-  const promptText = item.prompt || item.samplePrompt || '';
-  const seedValue = item.seed && item.seed !== '...' ? item.seed : null;
-  const pipeline = item.pipeline || (Array.isArray(item.primaryTools) ? item.primaryTools.join(' ➔ ') : (Array.isArray(item.aiTools) ? item.aiTools.join(' ➔ ') : (item.tool || 'Standard Generative Pipeline')));
-  const toolName = item.tool || (Array.isArray(item.primaryTools) ? item.primaryTools[0] : (Array.isArray(item.aiTools) ? item.aiTools[0] : 'Generative AI'));
-  const aspectRatio = item.aspectRatio || (Array.isArray(item.aspectRatios) ? item.aspectRatios[0] : (item.aspect_ratio || '16:9'));
+  const description = item.description || null;
+  const projectOutcome = item.project_outcome && item.project_outcome !== description ? item.project_outcome : null;
+  const mediaUrl = item.mediaUrl || item.sampleMedia || item.media_url || null;
+  const promptText = (item.prompt || item.samplePrompt || '').trim();
+  const seedValue = item.seed && item.seed !== '...' && item.seed !== 'N/A' && item.seed !== 'null' ? item.seed : null;
+  
+  // Tools & Skills arrays
+  const toolsList = Array.isArray(item.tools_used) && item.tools_used.length > 0 
+    ? item.tools_used 
+    : (Array.isArray(item.primaryTools) && item.primaryTools.length > 0
+      ? item.primaryTools 
+      : (Array.isArray(item.aiTools) && item.aiTools.length > 0
+        ? item.aiTools
+        : (item.tool ? [item.tool] : [])));
+        
+  const skillsList = Array.isArray(item.skills_used) && item.skills_used.length > 0
+    ? item.skills_used
+    : (Array.isArray(item.skills) && item.skills.length > 0 ? item.skills : []);
+
+  const toolName = item.tool || toolsList[0] || 'Generative AI';
+  const pipeline = item.pipeline || (toolsList.length > 1 ? toolsList.join(' ➔ ') : (toolsList[0] || 'Custom Generative Workflow'));
+  const aspectRatio = item.aspectRatio || item.aspect_ratio || (Array.isArray(item.aspectRatios) ? item.aspectRatios[0] : '16:9');
   const score = item.score ?? item.ai_creator_score ?? null;
   const isVerified = Boolean(item.verified === true || item.verified_workflow === true);
+  const verificationStatus = item.verification_status || (isVerified ? 'verified' : 'not_verified');
   const isVideo = isLikelyVideo(mediaUrl);
   const resolvedPoster = item.poster || item.thumbnail_url || resolvePoster({ media_url: mediaUrl, tool: toolName }, toolName);
+  const projectUrl = item.project_url || null;
 
   const handleCopyPrompt = () => {
     if (navigator?.clipboard && promptText) {
@@ -75,21 +104,21 @@ export default function PromptInspectorModal({ isOpen, onClose, item }) {
         {/* Modal Header */}
         <div className="p-5 sm:p-6 pb-4 border-b border-slate-100 flex items-start justify-between gap-4">
           <div>
-            <div className="flex items-center gap-2 mb-1 flex-wrap">
+            <div className="flex items-center gap-2 mb-1.5 flex-wrap">
               <span className="text-[10px] uppercase font-bold tracking-wider text-[#FF6B00] bg-orange-50 px-2.5 py-0.5 rounded-full border border-orange-100 flex items-center gap-1">
                 <Sparkles className="w-3 h-3" />
-                Prompt & Seed Inspector
+                Prompt & Workflow Inspector
               </span>
               {isVerified ? (
                 <VerifiedWorkflowBadge />
-              ) : (item.verification_status === 'pending_audit' || item.verification_status === 'pending_review' || item.verification_status === 'pending') ? (
+              ) : (verificationStatus === 'pending_audit' || verificationStatus === 'pending_review' || verificationStatus === 'pending') ? (
                 <VerificationBadge status="pending_review" />
               ) : (
-                <VerificationBadge status="not_verified" />
+                <VerificationBadge status={verificationStatus || 'not_verified'} />
               )}
               {item.verification_scope === 'pipeline' && <CertifiedPipelineBadge />}
             </div>
-            <h2 className="text-lg font-black text-slate-900 tracking-tight">{title}</h2>
+            <h2 className="text-lg font-black text-slate-900 tracking-tight leading-snug">{title}</h2>
           </div>
           <button 
             onClick={onClose}
@@ -101,8 +130,8 @@ export default function PromptInspectorModal({ isOpen, onClose, item }) {
         </div>
 
         {/* Scrollable Modal Content */}
-        <div className="p-5 sm:p-6 overflow-y-auto space-y-5">
-          {/* Media Preview Box with Guaranteed Poster & Fallback */}
+        <div className="p-5 sm:p-6 overflow-y-auto space-y-4">
+          {/* Media Preview Box */}
           <div className="aspect-video bg-slate-950 rounded-2xl overflow-hidden relative shadow-inner flex items-center justify-center border border-slate-800">
             {mediaUrl && isVideo ? (
               <video 
@@ -141,7 +170,61 @@ export default function PromptInspectorModal({ isOpen, onClose, item }) {
             </div>
           </div>
 
-          {/* Prompt Section */}
+          {/* Description & Outcome (when available) */}
+          {(description || projectOutcome) && (
+            <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-1">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-0.5">
+                Project Scope & Overview
+              </span>
+              {description && (
+                <p className="text-xs text-slate-700 leading-relaxed">{description}</p>
+              )}
+              {projectOutcome && (
+                <p className="text-[11px] text-emerald-700 font-semibold flex items-center gap-1 mt-1">
+                  <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>{projectOutcome}</span>
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Tools & Techniques (when available) */}
+          {(toolsList.length > 0 || skillsList.length > 0) && (
+            <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2.5">
+              {toolsList.length > 0 && (
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1 flex items-center gap-1">
+                    <Wrench className="w-3 h-3 text-slate-400" />
+                    Generative AI Models & Toolchain
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {toolsList.map((t, idx) => (
+                      <span key={idx} className="text-[11px] font-semibold bg-white border border-slate-200 text-slate-800 px-2.5 py-0.5 rounded-lg shadow-2xs">
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {skillsList.length > 0 && (
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1 flex items-center gap-1">
+                    <Tag className="w-3 h-3 text-slate-400" />
+                    Specialized Workflows & Techniques
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {skillsList.map((s, idx) => (
+                      <span key={idx} className="text-[11px] font-semibold bg-orange-50 border border-orange-200 text-[#FF6B00] px-2.5 py-0.5 rounded-lg">
+                        {s}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Prompt Section with Empty State */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
@@ -171,7 +254,10 @@ export default function PromptInspectorModal({ isOpen, onClose, item }) {
               {promptText ? (
                 <span className="text-emerald-400 select-all">{promptText}</span>
               ) : (
-                <span className="text-slate-500 italic">No prompt recorded for this asset.</span>
+                <div className="text-slate-400 italic flex items-center gap-2">
+                  <Sparkles className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                  <span>No prompt recorded for this asset. Proprietary workflow details may be protected or managed offline.</span>
+                </div>
               )}
             </div>
           </div>
@@ -206,7 +292,7 @@ export default function PromptInspectorModal({ isOpen, onClose, item }) {
                 <Ratio className="w-3 h-3 text-slate-400" />
                 Aspect Ratio
               </span>
-              <span className="font-semibold text-slate-900 text-sm">{aspectRatio}</span>
+              <span className="font-semibold text-slate-900 text-sm">{aspectRatio || '16:9'}</span>
             </div>
 
             {/* Pipeline Card */}
@@ -218,6 +304,21 @@ export default function PromptInspectorModal({ isOpen, onClose, item }) {
               <span className="font-semibold text-slate-800 text-xs block leading-relaxed">{pipeline}</span>
             </div>
           </div>
+
+          {/* External Project Link (when available) */}
+          {projectUrl && (
+            <div className="pt-2">
+              <a
+                href={projectUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 border border-slate-200 shadow-2xs"
+              >
+                <ExternalLink className="w-3.5 h-3.5 text-[#FF6B00]" />
+                <span>View Full Published Commercial Asset</span>
+              </a>
+            </div>
+          )}
         </div>
 
         {/* Modal Footer */}
@@ -231,5 +332,41 @@ export default function PromptInspectorModal({ isOpen, onClose, item }) {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function PromptInspectorModal(props) {
+  if (!props.isOpen) return null;
+
+  return (
+    <ErrorBoundary
+      onReset={props.onClose}
+      fallback={({ resetError }) => (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-md">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 text-center space-y-4 shadow-2xl border border-slate-200">
+            <div className="w-12 h-12 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center mx-auto border border-amber-200">
+              <AlertCircle className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="font-extrabold text-base text-slate-900">Workflow Inspector Notice</h3>
+              <p className="text-xs text-slate-500 mt-1">
+                The requested workflow inspection details could not be rendered.
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                resetError?.();
+                props.onClose?.();
+              }}
+              className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+    >
+      <PromptInspectorContent {...props} />
+    </ErrorBoundary>
   );
 }

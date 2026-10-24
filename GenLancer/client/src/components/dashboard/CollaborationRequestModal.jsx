@@ -12,9 +12,12 @@ import {
   Loader2, 
   Briefcase,
   SlidersHorizontal,
-  ChevronRight
+  ChevronRight,
+  LogOut
 } from 'lucide-react';
 import VerificationBadge from '../common/VerificationBadge';
+import { supabase, isSupabaseConfigured, getAccessToken } from '../../lib/supabase';
+import { apiUrl } from '../../lib/apiConfig';
 
 /**
  * CollaborationRequestModal
@@ -26,7 +29,8 @@ export default function CollaborationRequestModal({
   onClose,
   creator,
   user,
-  onSuccessSubmitted
+  onSuccessSubmitted,
+  onLogout
 }) {
   const [formData, setFormData] = useState({
     title: '',
@@ -108,6 +112,10 @@ export default function CollaborationRequestModal({
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+
+    // Prevent duplicate submissions while request is actively processing
+    if (isSubmitting) return;
+
     if (!validate()) return;
 
     setIsSubmitting(true);
@@ -115,9 +123,36 @@ export default function CollaborationRequestModal({
     setSubmitSuccess(null);
 
     try {
-      const token = localStorage.getItem('genlancer_auth_token') || sessionStorage.getItem('genlancer_auth_token');
-      const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+      // 1. Immediately obtain current authenticated Supabase session before submitting
+      let token = null;
+      if (isSupabaseConfigured && supabase?.auth) {
+        try {
+          const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
+          if (!sessionErr && sessionData?.session?.access_token) {
+            token = sessionData.session.access_token;
+          }
+        } catch (sessionErr) {
+          console.warn('Supabase getSession notice in CollaborationRequestModal:', sessionErr?.message);
+        }
+      }
 
+      // 2. Fallback to resilient getAccessToken() (covers stored JWTs and demo tokens)
+      if (!token) {
+        try {
+          token = await getAccessToken();
+        } catch (tokenErr) {
+          console.warn('getAccessToken notice:', tokenErr?.message);
+        }
+      }
+
+      // 3. Reject submission if no valid session/token exists
+      if (!token || typeof token !== 'string' || !token.trim() || token === 'undefined' || token === 'null') {
+        setIsSubmitting(false);
+        setSubmitError('Authentication required. Your session may have expired or you are not signed in. Please log in again to submit collaboration requests.');
+        return;
+      }
+
+      // 4. Construct payload preserving all existing form fields, validation, and metadata
       const payload = {
         freelancer_id: creator.id || 'FL001',
         project_brief: {
@@ -130,25 +165,40 @@ export default function CollaborationRequestModal({
           aspectRatio: formData.aspectRatio,
           preferredTools: formData.preferredTools,
           commercial_use_required: true,
-          company_name: user?.user_metadata?.company_name || user?.user_metadata?.full_name || 'Apex Creative Agency'
+          company_name: user?.user_metadata?.company_name || user?.user_metadata?.full_name || user?.company || user?.name || 'Apex Creative Agency'
         }
       };
 
-      const res = await fetch(`${API_BASE}/api/collaboration`, {
+      // 5. Submit request with Authorization: Bearer <access_token> and Content-Type: application/json
+      const endpoint = apiUrl('/api/collaboration');
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify(payload)
       });
 
-      const data = await res.json().catch(() => ({}));
-
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || `Server responded with status ${res.status}`);
+      // 6. Gracefully parse response and handle HTTP errors
+      let data = {};
+      try {
+        data = await res.json();
+      } catch (parseErr) {
+        throw new Error(`Server returned HTTP ${res.status} with an invalid non-JSON response.`);
       }
 
+      if (!res.ok || !data.success) {
+        if (res.status === 401) {
+          throw new Error(data.error || 'Authentication required. Your session has expired. Please log in again.');
+        } else if (res.status === 403) {
+          throw new Error(data.error || 'Access denied: Only authenticated Brand/Company accounts can submit collaboration requests.');
+        } else {
+          throw new Error(data.error || data.message || `Server responded with status ${res.status}`);
+        }
+      }
+
+      // 7. Success state handling
       setSubmitSuccess({
         requestId: data.request?.request_id,
         creatorName: creator.name
@@ -246,7 +296,30 @@ export default function CollaborationRequestModal({
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
               <div className="flex-1">
                 <span className="font-bold block">Submission Failed</span>
-                <span className="text-[11px]">{submitError}</span>
+                <span className="text-[11px] leading-relaxed">{submitError}</span>
+                {(submitError.toLowerCase().includes('log in') || 
+                  submitError.toLowerCase().includes('sign in') || 
+                  submitError.toLowerCase().includes('authentication required') || 
+                  submitError.toLowerCase().includes('session')) && (
+                  <div className="mt-2.5 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (typeof onLogout === 'function') {
+                          onLogout();
+                        } else {
+                          localStorage.removeItem('token');
+                          localStorage.removeItem('user');
+                          window.location.reload();
+                        }
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold text-[11px] rounded-lg transition-all cursor-pointer shadow-xs"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      <span>Log In Again</span>
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           )}

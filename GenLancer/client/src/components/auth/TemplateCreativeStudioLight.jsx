@@ -1,20 +1,99 @@
 import React, { useState } from 'react';
-import { Eye, EyeOff, Sparkles, Building2, Layers, Cpu, Palette, ArrowRight, Zap, CheckCircle2 } from 'lucide-react';
+import { Eye, EyeOff, Sparkles, Building2, Layers, Cpu, Palette, ArrowRight, Zap, CheckCircle2, AlertCircle, Mail, RefreshCw } from 'lucide-react';
 import GenLancerLogo from './GenLancerLogo';
-import { signInUser } from '../../lib/supabase';
+import { signInUser, resendVerificationEmail } from '../../lib/supabase';
+import { auth, googleProvider } from '../../firebase';
+import { signInWithPopup } from 'firebase/auth';
+import { DEMO_USERS } from '../../data/demoUsers';
 
 export default function TemplateCreativeStudioLight({ 
   onNavigateToRegister, 
   onLoginSuccess,
   onNavigateToLanding,
+  onNavigateToVerification,
+  onNavigateToForgotPassword,
   initialRole = 'freelancer'
 }) {
   const [role, setRole] = useState(initialRole); // 'freelancer' | 'company'
   const [showPassword, setShowPassword] = useState(false);
-  const [email, setEmail] = useState(initialRole === 'company' ? 'brand@genlancer.io' : 'creator@genlancer.io');
-  const [password, setPassword] = useState('pass123456');
+  const [email, setEmail] = useState(initialRole === 'company' ? 'apex@brand.demo' : 'aarav@genlancer.demo');
+  const [password, setPassword] = useState(initialRole === 'company' ? 'Apex@123' : 'Aarav@123');
   const [statusMessage, setStatusMessage] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [isResending, setIsResending] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleInlineResend = async (targetEmail) => {
+    setIsResending(true);
+    try {
+      await resendVerificationEmail(targetEmail);
+      setStatusMessage({
+        type: 'success',
+        text: `Fresh verification link dispatched to ${targetEmail}. Please check your inbox!`
+      });
+    } catch (err) {
+      setStatusMessage({
+        type: 'error',
+        text: err.message || 'Unable to resend verification email.'
+      });
+    } finally {
+      setIsResending(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setLoading(true);
+    setError('');
+    setStatusMessage(null);
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      const idToken = await result.user.getIdToken();
+      const selectedRole = role === 'company' ? 'company' : 'creator';
+
+      // Send the secure ID Token to the Express backend
+      const response = await fetch('http://localhost:3001/api/auth/firebase-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          token: idToken, 
+          role: selectedRole
+        })
+      });
+      
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Backend authentication failed.');
+      
+      // Store credentials and session
+      localStorage.setItem('token', data.token);
+      localStorage.setItem('user', JSON.stringify(data.user));
+      localStorage.setItem('genlancer_active_role', data.user.role === 'company' ? 'company' : 'freelancer');
+
+      setStatusMessage({
+        type: 'success',
+        text: `Authenticated with Google as ${data.user.name || data.user.email} (${data.user.role === 'company' ? 'Brand' : 'AI Creator'})`
+      });
+
+      // Navigate to respective dashboard
+      const targetRole = data.user.role === 'company' ? 'company' : 'freelancer';
+      setTimeout(() => {
+        if (typeof onLoginSuccess === 'function') {
+          onLoginSuccess(targetRole);
+        } else if (typeof navigate === 'function') {
+          navigate(data.user.role === 'company' ? '/company-dashboard' : '/creator-dashboard');
+        }
+      }, 600);
+    } catch (err) {
+      console.error('Auth Error:', err);
+      setError(err.message || 'Google Authentication failed.');
+      setStatusMessage({
+        type: 'error',
+        text: err.message || 'Google Authentication failed.'
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -32,29 +111,27 @@ export default function TemplateCreativeStudioLight({
 
       setTimeout(() => {
         setStatusMessage(null);
-        if (onLoginSuccess) onLoginSuccess(detectedRole);
+        if (onLoginSuccess) onLoginSuccess(detectedRole, data?.user);
       }, 700);
     } catch (err) {
-      console.warn('Login issue, falling back to development preview:', err.message);
-      setStatusMessage({
-        type: 'error',
-        text: err.message || 'Invalid email or password. Please verify credentials.'
-      });
-      setTimeout(() => setStatusMessage(null), 4000);
+      console.warn('Login issue:', err.message);
+
+      if (err.code === 'EMAIL_NOT_CONFIRMED' || err.unconfirmed) {
+        setStatusMessage({
+          type: 'unconfirmed',
+          email: email.trim(),
+          text: 'Your email address has not been verified yet. Please check your inbox for the verification link.'
+        });
+      } else {
+        setStatusMessage({
+          type: 'error',
+          text: err.message || 'Invalid email or password. Please verify credentials.'
+        });
+        setTimeout(() => setStatusMessage(null), 4000);
+      }
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const handleOAuth = async (provider) => {
-    setStatusMessage({
-      type: 'info',
-      text: `Connecting ${provider.toUpperCase()} OAuth for ${role === 'freelancer' ? 'AI Creator' : 'Brand Client'}...`
-    });
-    setTimeout(() => {
-      setStatusMessage(null);
-      if (onLoginSuccess) onLoginSuccess(role);
-    }, 1000);
   };
 
   return (
@@ -169,9 +246,50 @@ export default function TemplateCreativeStudioLight({
 
             {/* Notification Toast */}
             {statusMessage && (
-              <div className="mb-4 p-3 rounded-xl bg-orange-50 border border-orange-200 text-orange-900 text-xs flex items-center gap-2 animate-fade-in shadow-sm">
-                <CheckCircle2 className="w-4 h-4 text-[#FF6B00] shrink-0" />
-                <span className="font-semibold">{statusMessage.text}</span>
+              <div className={`mb-4 p-3.5 rounded-xl border text-xs shadow-sm animate-fade-in ${
+                statusMessage.type === 'unconfirmed'
+                  ? 'bg-amber-50 border-amber-200 text-amber-900'
+                  : statusMessage.type === 'error'
+                  ? 'bg-rose-50 border-rose-200 text-rose-800 flex items-center gap-2'
+                  : 'bg-orange-50 border-orange-200 text-orange-900 flex items-center gap-2'
+              }`}>
+                {statusMessage.type === 'unconfirmed' ? (
+                  <div className="space-y-2.5">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <span className="font-semibold leading-relaxed">{statusMessage.text}</span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 pt-1 pl-6">
+                      <button
+                        type="button"
+                        onClick={() => handleInlineResend(statusMessage.email || email)}
+                        disabled={isResending}
+                        className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-[11px] inline-flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-60"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${isResending ? 'animate-spin' : ''}`} />
+                        <span>{isResending ? 'Sending link...' : 'Resend Verification Link'}</span>
+                      </button>
+                      {onNavigateToVerification && (
+                        <button
+                          type="button"
+                          onClick={() => onNavigateToVerification(statusMessage.email || email, role)}
+                          className="text-[11px] text-amber-700 hover:underline font-semibold cursor-pointer"
+                        >
+                          Open Verification Screen
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {statusMessage.type === 'error' ? (
+                      <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
+                    ) : (
+                      <CheckCircle2 className="w-4 h-4 text-[#FF6B00] shrink-0" />
+                    )}
+                    <span className="font-semibold">{statusMessage.text}</span>
+                  </>
+                )}
               </div>
             )}
 
@@ -210,40 +328,70 @@ export default function TemplateCreativeStudioLight({
               </button>
             </div>
 
-            {/* Social Authentication (Google & GitHub) */}
-            <div className="grid grid-cols-2 gap-3 mb-6">
+            {/* Social Authentication (Firebase Google Sign-In) */}
+            <div className="mb-6">
               <button
                 type="button"
-                onClick={() => handleOAuth('Google')}
-                className="group flex items-center justify-center gap-2 py-2.5 px-4 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition-all hover:border-slate-300 shadow-sm cursor-pointer"
+                onClick={handleGoogleSignIn}
+                disabled={loading}
+                className="w-full group flex items-center justify-center gap-2.5 py-2.5 px-4 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition-all hover:border-slate-300 shadow-sm cursor-pointer disabled:opacity-60"
               >
-                <svg className="w-4 h-4 transition-transform group-hover:scale-110" viewBox="0 0 24 24">
+                <svg className="w-4 h-4 transition-transform group-hover:scale-110 shrink-0" viewBox="0 0 24 24">
                   <path fill="#EA4335" d="M12 5c1.6 0 3 .6 4.1 1.6l3.1-3.1C17.3 1.7 14.8 1 12 1 7.4 1 3.5 3.6 1.6 7.4l3.7 2.9C6.2 7.4 8.8 5 12 5z"/>
                   <path fill="#4285F4" d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.5h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.8z"/>
                   <path fill="#FBBC05" d="M5.3 14.7c-.2-.7-.4-1.5-.4-2.7s.1-2 .4-2.7L1.6 6.4C.6 8.3 0 10.1 0 12s.6 3.7 1.6 5.6l3.7-2.9z"/>
                   <path fill="#34A853" d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3.2 0-5.8-2.4-6.7-5.3L1.6 15.9C3.5 19.8 7.4 23 12 23z"/>
                 </svg>
-                <span>Google</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleOAuth('GitHub')}
-                className="group flex items-center justify-center gap-2 py-2.5 px-4 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition-all hover:border-slate-300 shadow-sm cursor-pointer"
-              >
-                <svg className="w-4 h-4 fill-current text-slate-900 transition-transform group-hover:scale-110" viewBox="0 0 24 24">
-                  <path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
-                </svg>
-                <span>GitHub</span>
+                <span>{loading ? 'Authenticating with Google...' : 'Continue with Google'}</span>
               </button>
             </div>
 
             {/* Separator */}
-            <div className="relative flex items-center justify-center mb-6">
+            <div className="relative flex items-center justify-center mb-5">
               <div className="border-t border-slate-200 w-full" />
               <span className="bg-white px-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                or sign in with password
+                or select test demo account
               </span>
+            </div>
+
+            {/* Quick Demo Test-Login Selector */}
+            <div className="p-3 bg-slate-50 border border-slate-200/90 rounded-2xl mb-5 shadow-xs">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                  <Zap className="w-3 h-3 text-[#FF6B00]" />
+                  Quick Test-Login Accounts
+                </span>
+                <span className="text-[10px] text-slate-400 font-medium">Click to fill credentials</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {DEMO_USERS.map((demo) => {
+                  const isSelected = email.toLowerCase() === demo.email.toLowerCase();
+                  const isCreator = demo.role === 'creator';
+                  return (
+                    <button
+                      key={demo.id}
+                      type="button"
+                      onClick={() => {
+                        setEmail(demo.email);
+                        setPassword(demo.password);
+                        setRole(isCreator ? 'freelancer' : 'company');
+                      }}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer flex items-center gap-1.5 border ${
+                        isSelected
+                          ? 'bg-[#FF6B00] text-white border-[#FF6B00] shadow-sm'
+                          : 'bg-white text-slate-700 hover:bg-slate-100 border-slate-200 hover:border-slate-300'
+                      }`}
+                      title={`${demo.name} (${demo.email} / ${demo.password})`}
+                    >
+                      <span>{isCreator ? '🎨' : '🏢'}</span>
+                      <span className="font-bold">{demo.name.split(' ')[0]}</span>
+                      <span className={`text-[9px] px-1 py-0.5 rounded font-mono ${isSelected ? 'bg-orange-700/50 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                        {demo.password}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {/* Form */}
@@ -265,13 +413,17 @@ export default function TemplateCreativeStudioLight({
               <div>
                 <div className="flex justify-between items-center mb-1.5">
                   <label className="text-xs font-bold text-slate-700">Password</label>
-                  <a 
-                    href="#forgot" 
-                    onClick={(e) => { e.preventDefault(); alert("Password reset link dispatched to " + email); }}
-                    className="text-xs text-[#FF6B00] hover:text-[#E05E00] font-semibold"
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      if (onNavigateToForgotPassword) {
+                        onNavigateToForgotPassword(email);
+                      }
+                    }}
+                    className="text-xs text-[#FF6B00] hover:text-[#E05E00] font-semibold hover:underline cursor-pointer"
                   >
                     Forgot password?
-                  </a>
+                  </button>
                 </div>
                 <div className="relative">
                   <input

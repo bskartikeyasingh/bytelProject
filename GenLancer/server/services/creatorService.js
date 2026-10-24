@@ -305,6 +305,30 @@ class CreatorService {
     const listRes = await this.getCreators({ forceDemo });
     const creator = listRes.creators.find(c => String(c.id) === String(creatorId));
     if (!creator) {
+      if (this.supabase && !forceDemo && process.env.DEMO_MODE !== 'true') {
+        try {
+          const { data: fl } = await this.supabase
+            .from('freelancers')
+            .select('*')
+            .eq('id', creatorId)
+            .maybeSingle();
+
+          if (fl) {
+            return normalizeCreator(fl, { isDemo: false });
+          }
+
+          // Return clean, unpopulated creator structure for newly registered user
+          return {
+            id: creatorId,
+            name: 'AI Creator',
+            portfolio_items: [],
+            verified: false,
+            verification_status: 'not_verified',
+            score: null,
+            is_demo: false
+          };
+        } catch (_) {}
+      }
       throw new DatabaseError(`Creator with ID '${creatorId}' not found.`, 404, 'CREATOR_NOT_FOUND');
     }
     return creator;
@@ -392,10 +416,29 @@ class CreatorService {
         .from('freelancers')
         .select('portfolio_items')
         .eq('id', creatorId)
-        .single();
+        .maybeSingle();
 
       if (fetchErr || !currentRows) {
-        throw new DatabaseError(`Unable to fetch creator '${creatorId}' for portfolio update.`, 404, 'CREATOR_NOT_FOUND');
+        // Creator row doesn't exist yet in freelancers (newly registered user) - insert initial creator row with this portfolio item!
+        const initialCreator = {
+          id: creatorId,
+          name: itemData.creator_name || itemData.name || 'AI Creator',
+          email: itemData.email || `${creatorId}@genlancer.io`,
+          portfolio_items: [newEntry],
+          hourly_rate_usd: 100,
+          availability: 'Available',
+          commercial_use_licensing: 'Full commercial rights included'
+        };
+
+        const { error: insertErr } = await this.supabase
+          .from('freelancers')
+          .insert([initialCreator]);
+
+        if (insertErr) {
+          throw new DatabaseError(`Failed to save initial portfolio item: ${insertErr.message}`, 500, 'DATABASE_INSERT_ERROR');
+        }
+
+        return { success: true, item: newEntry, creator_id: creatorId };
       }
 
       let existingItems = currentRows.portfolio_items || [];
@@ -409,8 +452,7 @@ class CreatorService {
       const { error: updateErr } = await this.supabase
         .from('freelancers')
         .update({ 
-          portfolio_items: updatedItems,
-          updated_at: new Date().toISOString()
+          portfolio_items: updatedItems
         })
         .eq('id', creatorId);
 
@@ -428,7 +470,7 @@ class CreatorService {
   /**
    * Update an existing portfolio entry
    */
-  async updatePortfolioItem(creatorId, itemId, updateData, { forceDemo = false } = {}) {
+  async updatePortfolioItem(creatorId, itemId, updateData, { forceDemo = false, allowVerificationOverride = false, allowStatusTransition = false } = {}) {
     if (!updateData || typeof updateData !== 'object') {
       throw new DatabaseError('Update payload must be a JSON object.', 400, 'INVALID_PAYLOAD');
     }
@@ -466,6 +508,23 @@ class CreatorService {
       const promptChanged = updateData.prompt && updateData.prompt !== existing.prompt;
       const mustResetAudit = mediaChanged || promptChanged;
 
+      let verifiedValue = existing.verified || false;
+      let statusValue = existing.verification_status || 'not_verified';
+      let scopeValue = existing.verification_scope || null;
+
+      if (mustResetAudit) {
+        verifiedValue = false;
+        statusValue = 'not_verified';
+        scopeValue = null;
+      } else if (allowVerificationOverride) {
+        if (updateData.verified !== undefined) verifiedValue = Boolean(updateData.verified);
+        if (updateData.verification_status !== undefined) statusValue = updateData.verification_status;
+        if (updateData.verification_scope !== undefined) scopeValue = updateData.verification_scope;
+      } else if (allowStatusTransition && updateData.verification_status === 'pending_review') {
+        statusValue = 'pending_review';
+        verifiedValue = false;
+      }
+
       const updated = {
         ...existing,
         title: updateData.title ? String(updateData.title).trim() : existing.title,
@@ -482,9 +541,9 @@ class CreatorService {
         aspect_ratio: updateData.aspect_ratio || existing.aspect_ratio,
         prompt: updateData.prompt !== undefined ? String(updateData.prompt).trim() : existing.prompt,
         seed: updateData.seed !== undefined ? String(updateData.seed).trim() : existing.seed,
-        verified: mustResetAudit ? false : (updateData.verified !== undefined ? Boolean(updateData.verified) : existing.verified),
-        verification_status: mustResetAudit ? 'not_verified' : (updateData.verification_status || existing.verification_status || 'not_verified'),
-        verification_scope: mustResetAudit ? null : (updateData.verification_scope !== undefined ? updateData.verification_scope : existing.verification_scope),
+        verified: verifiedValue,
+        verification_status: statusValue,
+        verification_scope: scopeValue,
         updated_at: new Date().toISOString()
       };
 
@@ -523,7 +582,7 @@ class CreatorService {
 
       const { error: saveErr } = await this.supabase
         .from('freelancers')
-        .update({ portfolio_items: items, updated_at: new Date().toISOString() })
+        .update({ portfolio_items: items })
         .eq('id', creatorId);
 
       if (saveErr) {
@@ -583,7 +642,7 @@ class CreatorService {
 
       const { error: saveErr } = await this.supabase
         .from('freelancers')
-        .update({ portfolio_items: remaining, updated_at: new Date().toISOString() })
+        .update({ portfolio_items: remaining })
         .eq('id', creatorId);
 
       if (saveErr) {
@@ -602,8 +661,9 @@ class CreatorService {
    */
   async submitPortfolioItemForReview(creatorId, itemId, { forceDemo = false } = {}) {
     return this.updatePortfolioItem(creatorId, itemId, {
-      verification_status: 'pending_review'
-    }, { forceDemo });
+      verification_status: 'pending_review',
+      verified: false
+    }, { forceDemo, allowStatusTransition: true });
   }
 
   /**
@@ -619,7 +679,7 @@ class CreatorService {
       verification_status: newStatus,
       verification_scope: newScope,
       review_notes: reviewNotes
-    }, { forceDemo });
+    }, { forceDemo, allowVerificationOverride: true });
   }
 }
 

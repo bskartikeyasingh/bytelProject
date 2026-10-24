@@ -1,0 +1,18 @@
+# Local Server Dependencies
+node_modules/
+
+# Server Environment Secrets
+.env
+
+# Google Firebase Admin SDK Secrets (CRITICAL)
+firebase-service-account.json
+*.pem
+*.key
+
+# Local Media Store (Prevents heavy test videos/images from uploading to Git)
+uploads/
+temp/
+
+# Logs
+logs/
+*.log

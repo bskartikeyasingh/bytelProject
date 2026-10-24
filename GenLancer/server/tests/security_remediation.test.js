@@ -10,6 +10,7 @@ import {
 import { collaborationService, CollaborationStatus } from '../services/collaborationService.js';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 describe('GenLancer Security Remediation & Authorization Regression Suite', () => {
   const BASE_URL = 'http://localhost:3001';
@@ -1184,7 +1185,7 @@ describe('GenLancer Security Remediation & Authorization Regression Suite', () =
 
     // Static Migration Schema & Policy Audit (Distinguished from database execution)
     describe('Static Migration Schema & Policy Audit (File Analysis)', () => {
-      const migrationPath = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../migrations/003_secure_auth_and_rls_policies.sql');
+      const migrationPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../migrations/003_secure_auth_and_rls_policies.sql');
       const migrationSql = fs.readFileSync(migrationPath, 'utf8');
 
       test('[Static Audit] is_trusted_service_role handles NULL setting fail-closed and sets search_path', () => {

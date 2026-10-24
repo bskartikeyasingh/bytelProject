@@ -13,6 +13,9 @@ import {
 } from 'lucide-react';
 import GenLancerLogo from './GenLancerLogo';
 import { signUpUser } from '../../lib/supabase';
+import { validateRegistrationEmail } from '../../lib/emailSecurity';
+import { auth, googleProvider } from '../../firebase';
+import { signInWithPopup } from 'firebase/auth';
 
 export default function RegisterPage({ 
   onNavigateToLogin, 
@@ -24,6 +27,8 @@ export default function RegisterPage({
   const [showPassword, setShowPassword] = useState(false);
   const [statusMessage, setStatusMessage] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -31,6 +36,59 @@ export default function RegisterPage({
     password: '',
     agreedToTerms: false
   });
+
+  const handleGoogleSignIn = async () => {
+    setLoading(true);
+    setError('');
+    setStatusMessage(null);
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      const idToken = await result.user.getIdToken();
+      const selectedRole = role === 'company' ? 'company' : 'creator';
+
+      // Send the secure ID Token to the Express backend
+      const response = await fetch('http://localhost:3001/api/auth/firebase-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          token: idToken, 
+          role: selectedRole
+        })
+      });
+      
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Backend authentication failed.');
+      
+      // Store credentials and session
+      localStorage.setItem('token', data.token);
+      localStorage.setItem('user', JSON.stringify(data.user));
+      localStorage.setItem('genlancer_active_role', data.user.role === 'company' ? 'company' : 'freelancer');
+
+      setStatusMessage({
+        type: 'success',
+        text: `Registered with Google as ${data.user.name || data.user.email} (${data.user.role === 'company' ? 'Brand' : 'AI Creator'})`
+      });
+
+      // Navigate to respective dashboard
+      const targetRole = data.user.role === 'company' ? 'company' : 'freelancer';
+      setTimeout(() => {
+        if (typeof onRegisterSuccess === 'function') {
+          onRegisterSuccess(targetRole);
+        } else if (typeof navigate === 'function') {
+          navigate(data.user.role === 'company' ? '/company-dashboard' : '/creator-dashboard');
+        }
+      }, 600);
+    } catch (err) {
+      console.error('Auth Error:', err);
+      setError(err.message || 'Google Authentication failed.');
+      setStatusMessage({
+        type: 'error',
+        text: err.message || 'Google Authentication failed.'
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleChange = (field, value) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -47,12 +105,55 @@ export default function RegisterPage({
       return;
     }
 
+    if (!formData.password || formData.password.length < 8) {
+      setStatusMessage({
+        type: 'error',
+        text: 'Password must be at least 8 characters long.'
+      });
+      setTimeout(() => setStatusMessage(null), 3500);
+      return;
+    }
+
+    const emailCheck = validateRegistrationEmail(formData.email);
+    if (!emailCheck.valid) {
+      setStatusMessage({
+        type: 'error',
+        text: emailCheck.error
+      });
+      setTimeout(() => setStatusMessage(null), 4000);
+      return;
+    }
+
     setIsLoading(true);
     setStatusMessage(null);
 
     try {
-      await signUpUser({
-        email: formData.email,
+      // Server-side anti-abuse and disposable email pre-check
+      try {
+        const preCheckRes = await fetch('http://localhost:3001/api/auth/validate-signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: emailCheck.sanitized, role })
+        });
+        if (preCheckRes.status === 429) {
+          const errData = await preCheckRes.json();
+          throw new Error(errData.error || 'Too many signup attempts. Please wait a moment.');
+        }
+        if (preCheckRes.status === 400) {
+          const errData = await preCheckRes.json();
+          throw new Error(errData.error || 'Invalid email address.');
+        }
+      } catch (backendErr) {
+        // Only halt if backend returned explicit 400/429
+        if (backendErr.message && !backendErr.message.includes('Failed to fetch')) {
+          setStatusMessage({ type: 'error', text: backendErr.message });
+          setIsLoading(false);
+          return;
+        }
+      }
+
+      const result = await signUpUser({
+        email: emailCheck.sanitized,
         password: formData.password,
         role,
         fullName: formData.name,
@@ -61,24 +162,29 @@ export default function RegisterPage({
 
       setStatusMessage({
         type: 'success',
-        text: `Account created for ${formData.name} as ${role === 'freelancer' ? 'AI Creator' : 'Brand Client'}!`
+        text: `Verification link dispatched to ${emailCheck.sanitized}. Check your inbox!`
       });
 
       setTimeout(() => {
         setStatusMessage(null);
         if (onRegisterSuccess) {
-          onRegisterSuccess(role);
+          onRegisterSuccess({
+            needsVerification: true,
+            email: emailCheck.sanitized,
+            role,
+            user: result?.user
+          });
         } else if (onNavigateToLogin) {
           onNavigateToLogin();
         }
-      }, 900);
+      }, 700);
     } catch (err) {
-      console.warn('Registration issue, falling back to development preview:', err.message);
+      console.warn('Registration issue:', err.message);
       setStatusMessage({
         type: 'error',
-        text: err.message || 'Registration failed. Please check credentials.'
+        text: err.message || 'Registration failed. Please verify your details.'
       });
-      setTimeout(() => setStatusMessage(null), 4000);
+      setTimeout(() => setStatusMessage(null), 4500);
     } finally {
       setIsLoading(false);
     }
@@ -246,31 +352,21 @@ export default function RegisterPage({
               </button>
             </div>
 
-            {/* Social OAuth Sign Up */}
-            <div className="grid grid-cols-2 gap-3 mb-6">
+            {/* Social Authentication (Firebase Google Sign-In) */}
+            <div className="mb-6">
               <button
                 type="button"
-                onClick={() => handleOAuth('Google')}
-                className="group flex items-center justify-center gap-2 py-2.5 px-4 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition-all hover:border-slate-300 shadow-sm cursor-pointer"
+                onClick={handleGoogleSignIn}
+                disabled={loading}
+                className="w-full group flex items-center justify-center gap-2.5 py-2.5 px-4 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition-all hover:border-slate-300 shadow-sm cursor-pointer disabled:opacity-60"
               >
-                <svg className="w-4 h-4 transition-transform group-hover:scale-110" viewBox="0 0 24 24">
+                <svg className="w-4 h-4 transition-transform group-hover:scale-110 shrink-0" viewBox="0 0 24 24">
                   <path fill="#EA4335" d="M12 5c1.6 0 3 .6 4.1 1.6l3.1-3.1C17.3 1.7 14.8 1 12 1 7.4 1 3.5 3.6 1.6 7.4l3.7 2.9C6.2 7.4 8.8 5 12 5z"/>
                   <path fill="#4285F4" d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.5h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.8z"/>
                   <path fill="#FBBC05" d="M5.3 14.7c-.2-.7-.4-1.5-.4-2.7s.1-2 .4-2.7L1.6 6.4C.6 8.3 0 10.1 0 12s.6 3.7 1.6 5.6l3.7-2.9z"/>
                   <path fill="#34A853" d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3.2 0-5.8-2.4-6.7-5.3L1.6 15.9C3.5 19.8 7.4 23 12 23z"/>
                 </svg>
-                <span>Google</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleOAuth('GitHub')}
-                className="group flex items-center justify-center gap-2 py-2.5 px-4 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition-all hover:border-slate-300 shadow-sm cursor-pointer"
-              >
-                <svg className="w-4 h-4 fill-current text-slate-900 transition-transform group-hover:scale-110" viewBox="0 0 24 24">
-                  <path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
-                </svg>
-                <span>GitHub</span>
+                <span>{loading ? 'Authenticating with Google...' : 'Continue with Google'}</span>
               </button>
             </div>
 

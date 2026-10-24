@@ -191,8 +191,7 @@ class CollaborationService {
       }
     }
 
-    const isUuid = data.request_id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data.request_id);
-    const requestId = isUuid ? data.request_id : (crypto.randomUUID ? crypto.randomUUID() : this._generateId('req'));
+    const requestId = data.request_id || (crypto.randomUUID ? crypto.randomUUID() : this._generateId('req'));
     const now = new Date().toISOString();
     const initialBrief = data.project_brief || {};
 

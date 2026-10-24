@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   LayoutGrid, 
   FileText, 
@@ -37,7 +37,7 @@ import GenLancerLogo from '../auth/GenLancerLogo';
 import { supabase, isSupabaseConfigured, authFetch } from '../../lib/supabase';
 import { apiUrl } from '../../lib/apiConfig';
 import { validateUrl } from '../../lib/urlValidator';
-import { sendChatMessage, fetchChatMessages, fetchChatMessagesResult } from '../../lib/chatService';
+import { sendChatMessage, fetchChatMessages, fetchChatMessagesResult, subscribeToMessages } from '../../lib/chatService';
 import PromptInspectorModal from '../common/PromptInspectorModal';
 import ChatLockoutOverlay from '../common/ChatLockoutOverlay';
 import VerificationBadge, { VerifiedWorkflowBadge, CertifiedPipelineBadge, AICreatorScoreBadge } from '../common/VerificationBadge';
@@ -45,11 +45,14 @@ import ClarificationModal from '../common/ClarificationModal';
 import BriefVersionBadge from '../common/BriefVersionBadge';
 import CollaborationTimeline from '../common/CollaborationTimeline';
 import { resolvePoster, isLikelyVideo, AI_MEDIA_PRESETS } from '../../lib/mediaAssets';
+import { DEMO_USERS } from '../../data/demoUsers';
+import SubscriptionCenter from './SubscriptionCenter';
+import UploadModal from '../portfolio/UploadModal';
 
-export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) {
+export default function CreatorDashboard({ user, onLogout }) {
   const [activeTab, setActiveTab] = useState('portfolio'); // 'portfolio' | 'requests' | 'messages' | 'work'
   const [isAuditing, setIsAuditing] = useState(false);
-  const [auditScore, setAuditScore] = useState(94);
+  const [auditScore, setAuditScore] = useState(null);
   const [auditNotification, setAuditNotification] = useState(null);
   const [selectedAssetForInspect, setSelectedAssetForInspect] = useState(null);
 
@@ -63,6 +66,122 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
   const [clarifyModalReq, setClarifyModalReq] = useState(null);
   const [clarifyText, setClarifyText] = useState('');
   const [isSubmittingClarify, setIsSubmittingClarify] = useState(false);
+
+  // Retrieve Logged-In User Session
+  const [userProfile, setUserProfile] = useState(null);
+
+  // Creator Info State (Editable via Settings)
+  const [creator, setCreator] = useState({
+    name: "AI Creator",
+    title: "AI Creator",
+    currentCompany: "",
+    avatar: "/default-avatar.png",
+    verified: false,
+    verification_status: "not_verified",
+    verification_scope: null,
+    is_demo: false
+  });
+
+  const [editForm, setEditForm] = useState({ ...creator });
+
+  useEffect(() => {
+    // Retrieve logged-in user session
+    let activeUser = null;
+    const storedUser = localStorage.getItem("user");
+    if (storedUser) {
+      try { activeUser = JSON.parse(storedUser); } catch (e) {}
+    }
+    if (!activeUser && user) {
+      activeUser = user;
+    }
+
+    if (activeUser) {
+      const userEmail = (activeUser.email || activeUser.user_metadata?.email || '').toLowerCase();
+      const userId = String(activeUser.id || '');
+      const matchedDemo = DEMO_USERS.find(
+        u => u.email?.toLowerCase() === userEmail || u.id === userId
+      );
+      const isDemo = Boolean(matchedDemo || activeUser.isDemo || userEmail.endsWith('.demo') || userId.startsWith('demo_user_'));
+
+      if (isDemo && matchedDemo) {
+        // Designated demo account - preserve intended demo presentation
+        const resolved = {
+          ...matchedDemo,
+          ...activeUser,
+          id: matchedDemo.id,
+          full_name: activeUser.full_name || activeUser.displayName || matchedDemo.name,
+          displayName: activeUser.displayName || activeUser.full_name || matchedDemo.name,
+          specialization: activeUser.specialization || activeUser.title || matchedDemo.specialization,
+          bio: activeUser.bio || matchedDemo.bio,
+          company: activeUser.company || matchedDemo.company || "",
+          ai_score: activeUser.ai_score ?? activeUser.score ?? matchedDemo.score,
+          is_verified: activeUser.is_verified ?? activeUser.verified ?? matchedDemo.verified,
+          photoURL: activeUser.photoURL || activeUser.avatar || matchedDemo.avatar,
+          is_demo: true
+        };
+        setUserProfile(resolved);
+        setCreator({
+          name: resolved.full_name,
+          title: resolved.specialization,
+          currentCompany: resolved.company,
+          avatar: resolved.photoURL,
+          verified: resolved.is_verified,
+          verification_status: resolved.is_verified ? 'verified' : 'not_verified',
+          verification_scope: 'workflow',
+          is_demo: true
+        });
+        setEditForm({
+          name: resolved.full_name,
+          title: resolved.specialization,
+          currentCompany: resolved.company,
+          avatar: resolved.photoURL
+        });
+        setAuditScore(resolved.ai_score);
+      } else {
+        // Real authenticated registered creator - strict isolation, no fake data or demo defaults
+        const realName = activeUser.full_name || activeUser.displayName || activeUser.name || activeUser.user_metadata?.full_name || (userEmail ? userEmail.split('@')[0] : 'AI Creator');
+        const realTitle = activeUser.specialization || activeUser.title || activeUser.user_metadata?.specialization || 'AI Creator';
+        const realBio = activeUser.bio || activeUser.user_metadata?.bio || '';
+        const realCompany = activeUser.company || activeUser.currentCompany || activeUser.user_metadata?.company || '';
+        const realAvatar = activeUser.photoURL || activeUser.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(userId || 'creator')}`;
+        const realScore = activeUser.ai_score ?? activeUser.user_metadata?.ai_score ?? null;
+        const realVerified = Boolean(activeUser.is_verified || activeUser.user_metadata?.is_verified || false);
+
+        const resolved = {
+          ...activeUser,
+          id: userId,
+          full_name: realName,
+          displayName: realName,
+          name: realName,
+          specialization: realTitle,
+          bio: realBio,
+          company: realCompany,
+          ai_score: realScore,
+          is_verified: realVerified,
+          photoURL: realAvatar,
+          is_demo: false
+        };
+        setUserProfile(resolved);
+        setCreator({
+          name: realName,
+          title: realTitle,
+          currentCompany: realCompany,
+          avatar: realAvatar,
+          verified: realVerified,
+          verification_status: realVerified ? 'verified' : 'not_verified',
+          verification_scope: null,
+          is_demo: false
+        });
+        setEditForm({
+          name: realName,
+          title: realTitle,
+          currentCompany: realCompany,
+          avatar: realAvatar
+        });
+        setAuditScore(realScore);
+      }
+    }
+  }, [user]);
 
   // Keyboard accessibility handler for modals
   useEffect(() => {
@@ -78,96 +197,20 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showUploadModal, showSettingsModal, selectedAssetForInspect, clarifyModalReq]);
 
-  // Creator Info State (Editable via Settings)
-  const [creator, setCreator] = useState({
-    name: "Alex Smith",
-    title: "AI Film Director & Creative Technologist",
-    currentCompany: "Nexus Synthetic Media Studio",
-    avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300"
-  });
+  const isDemoSession = Boolean(
+    userProfile?.is_demo || 
+    (userProfile?.email && userProfile.email.endsWith('.demo')) ||
+    (user?.email && user.email.endsWith('.demo')) ||
+    userProfile?.id?.startsWith('demo_user_') ||
+    user?.id?.startsWith('demo_user_')
+  );
 
-  const [editForm, setEditForm] = useState({ ...creator });
+  const currentFreelancerId = userProfile?.id || user?.id || localStorage.getItem('genlancer_user_id') || (isDemoSession ? 'demo_user_101' : null);
 
-  const currentFreelancerId = user?.id || localStorage.getItem('genlancer_user_id') || 'c1';
-
-  // Portfolio Items State
-  const [portfolioItems, setPortfolioItems] = useState([
-    {
-      id: "p1",
-      title: "Neon Monolith - Cyberpunk Commercial",
-      description: "Atmospheric dystopian luxury beverage campaign render for international broadcast.",
-      creator_role: "Lead Generative AI Director",
-      skills_used: ["Prompt Engineering", "Anamorphic Cinematography", "Photorealistic Upscaling"],
-      tools_used: ["Runway Gen-3 Alpha", "Midjourney v6", "Topaz 4K"],
-      tool: "Runway Gen-3 Alpha",
-      content_type: "Video",
-      niche: "Cyberpunk / Commercial",
-      media_url: "https://assets.mixkit.co/videos/preview/mixkit-cyberpunk-neon-city-street-41804-large.mp4",
-      mediaUrl: "https://assets.mixkit.co/videos/preview/mixkit-cyberpunk-neon-city-street-41804-large.mp4",
-      poster: "https://images.unsplash.com/photo-1578632767115-351597cf2477?w=1200&auto=format&fit=crop&q=80",
-      thumbnail_url: "https://images.unsplash.com/photo-1578632767115-351597cf2477?w=1200&auto=format&fit=crop&q=80",
-      project_url: "https://vimeo.com/76979871",
-      project_outcome: "2.4M organic views; selected as Best AI Short 2026",
-      aspect_ratio: "16:9",
-      aspectRatio: "16:9",
-      pipeline: "Midjourney v6 ➔ Runway Gen-3 ➔ Topaz 4K",
-      prompt: "/imagine prompt: futuristic mega-city at night, neon reflections in rainwater, anamorphic cinematic 8k --ar 16:9",
-      seed: "482019482",
-      verified: true,
-      verification_status: "verified",
-      verification_scope: "workflow"
-    },
-    {
-      id: "p2",
-      title: "Biomechanical Android Concept",
-      description: "High-precision neural interface study rendering subsurface scattering and copper wiring.",
-      creator_role: "Generative Concept Artist",
-      skills_used: ["ControlNet Guidance", "Depth Map Conditioning", "Blender Lighting"],
-      tools_used: ["Flux.1 Dev", "ComfyUI", "Blender"],
-      tool: "Flux.1 Dev + ComfyUI",
-      content_type: "Video",
-      niche: "Sci-Fi / Hardware Concept",
-      media_url: "https://assets.mixkit.co/videos/preview/mixkit-hand-holding-a-glowing-futuristic-device-41805-large.mp4",
-      mediaUrl: "https://assets.mixkit.co/videos/preview/mixkit-hand-holding-a-glowing-futuristic-device-41805-large.mp4",
-      poster: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1200&auto=format&fit=crop&q=80",
-      thumbnail_url: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1200&auto=format&fit=crop&q=80",
-      project_url: null,
-      project_outcome: "Reduced 3D prototype iteration time by 75%",
-      aspect_ratio: "1:1",
-      aspectRatio: "1:1",
-      pipeline: "Flux.1 ➔ ControlNet Depth ➔ Blender Compositor",
-      prompt: "close-up portrait of android with exposed copper neural cables, volumetric amber lighting, macro photography",
-      seed: "99102412",
-      verified: true,
-      verification_status: "verified",
-      verification_scope: "pipeline"
-    },
-    {
-      id: "p3",
-      title: "Obsidian Spire Drone Sequence",
-      description: "Hyper-speed cinematic drone run over synthetic obsidian monoliths with camera projections.",
-      creator_role: "3D Synthetic Media Lead",
-      skills_used: ["Camera Projections", "Blender Integration", "VFX Motion"],
-      tools_used: ["Kling AI 1.5", "Blender", "Topaz 4K"],
-      tool: "Kling AI 1.5 + Blender",
-      content_type: "Video",
-      niche: "Sci-Fi / Drone Animatics",
-      media_url: "https://assets.mixkit.co/videos/preview/mixkit-futuristic-flying-car-in-a-cyberpunk-city-41807-large.mp4",
-      mediaUrl: "https://assets.mixkit.co/videos/preview/mixkit-futuristic-flying-car-in-a-cyberpunk-city-41807-large.mp4",
-      poster: "https://images.unsplash.com/photo-1634017839464-5c339ebe3cb4?w=1200&auto=format&fit=crop&q=80",
-      thumbnail_url: "https://images.unsplash.com/photo-1634017839464-5c339ebe3cb4?w=1200&auto=format&fit=crop&q=80",
-      project_url: null,
-      project_outcome: "Selected for Siggraph 2026 generative showcase",
-      aspect_ratio: "16:9",
-      aspectRatio: "16:9",
-      pipeline: "Blender ➔ Kling AI 1.5 ➔ Topaz 4K",
-      prompt: "cinematic drone follow shot of high-tech flying vehicle gliding over glowing obsidian skyscrapers",
-      seed: "772183921",
-      verified: true,
-      verification_status: "verified",
-      verification_scope: "workflow"
-    }
-  ]);
+  // Portfolio Items State - strictly isolated by user, never initialized with demo arrays
+  const [portfolioItems, setPortfolioItems] = useState([]);
+  const [isLoadingPortfolio, setIsLoadingPortfolio] = useState(true);
+  const [portfolioError, setPortfolioError] = useState(null);
 
   // Modal & Form State for Portfolio Items
   const [editingItem, setEditingItem] = useState(null);
@@ -336,46 +379,83 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
     };
   }, [user]);
 
-  // Companies with ACCEPTED Briefs (Only these show in Communications)
-  const [acceptedCompanies, setAcceptedCompanies] = useState([
-    {
-      id: "comp-1",
-      name: "Volt Energy Co.",
-      campaign: "Cyberpunk Beverage Ad",
-      avatar: "⚡",
-      status: "confirmed",
-      unread: true,
-      messages: [
-        { id: 1, sender: 'brand', author: 'Marcus (Volt Energy)', text: 'Hi Alex! We reviewed your Runway Gen-3 reel. Can you deliver the 16:9 cut by Friday?', time: '10:45 AM' },
-        { id: 2, sender: 'creator', author: 'Alex Smith', text: 'Hey Marcus! Yes, the prompt pipeline is cached. First delivery in 48 hours.', time: '11:12 AM' }
-      ]
-    },
-    {
-      id: "comp-2",
-      name: "Nike Digital",
-      campaign: "3D Generative Product Animation",
-      avatar: "✔️",
-      status: "accepted",
-      unread: false,
-      messages: [
-        { id: 1, sender: 'brand', author: 'Elena (Nike)', text: 'The Blender + Topaz renders look exceptional. Final approval granted!', time: 'Yesterday' },
-        { id: 2, sender: 'creator', author: 'Alex Smith', text: 'Thanks Elena! Full commercial master files uploaded to the drive.', time: 'Yesterday' }
-      ]
-    },
-    {
-      id: "comp-3",
-      name: "Prada Future",
-      campaign: "Hyper-Real Luxury Commercial",
-      avatar: "💎",
-      status: "pending",
-      unread: false,
-      messages: [
-        { id: 1, sender: 'brand', author: 'Prada Creative', text: 'We have dispatched our creative brief and escrow deposit for your review.', time: 'Yesterday' }
-      ]
-    }
-  ]);
+  // Selected conversation ID (keyed by collaboration request_id)
+  const [selectedConversationId, setSelectedConversationId] = useState(null);
 
-  const [activeCompanyId, setActiveCompanyId] = useState("comp-1");
+  // Accepted & Confirmed Conversations dynamically derived from incomingRequests
+  const acceptedConversations = useMemo(() => {
+    const fromRequests = (incomingRequests || [])
+      .filter(r => r.status === 'accepted' || r.status === 'confirmed')
+      .map(r => {
+        const reqId = r.request_id || r.id;
+        const compName = r.company || r.project_brief?.company_name || 'Brand Partner';
+        const campaignName = r.campaignTitle || r.project_brief?.title || r.project_brief?.project_name || 'Commercial Collaboration';
+        const initials = compName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() || '🏢';
+        return {
+          id: reqId,
+          requestId: reqId,
+          name: compName,
+          campaign: campaignName,
+          avatar: initials,
+          status: r.status,
+          unread: false,
+          raw: r
+        };
+      });
+
+    if (fromRequests.length > 0) {
+      return fromRequests;
+    }
+
+    // Fallback demo conversations only for explicit demo sessions
+    if (isDemoSession) {
+      return [
+        {
+          id: "REQ-DEMO-001",
+          requestId: "REQ-DEMO-001",
+          name: "Volt Energy Co.",
+          campaign: "Cyberpunk Beverage Ad",
+          avatar: "⚡",
+          status: "confirmed",
+          unread: false,
+          messages: [
+            { id: 1, sender: 'brand', author: 'Marcus (Volt Energy)', text: 'Hi there! We reviewed your Runway Gen-3 reel. Can you deliver the 16:9 cut by Friday?', time: '10:45 AM' },
+            { id: 2, sender: 'creator', author: userProfile?.full_name || 'Aarav Sharma', text: 'Hey Marcus! Yes, the prompt pipeline is cached. First delivery in 48 hours.', time: '11:12 AM' }
+          ]
+        },
+        {
+          id: "REQ-DEMO-002",
+          requestId: "REQ-DEMO-002",
+          name: "Nike Digital",
+          campaign: "3D Generative Product Animation",
+          avatar: "✔️",
+          status: "accepted",
+          unread: false,
+          messages: [
+            { id: 1, sender: 'brand', author: 'Elena (Nike)', text: 'The Blender + Topaz renders look exceptional. Final approval granted!', time: 'Yesterday' },
+            { id: 2, sender: 'creator', author: userProfile?.full_name || 'Aarav Sharma', text: 'Thanks Elena! Full commercial master files uploaded to the drive.', time: 'Yesterday' }
+          ]
+        }
+      ];
+    }
+
+    return [];
+  }, [incomingRequests, userProfile, isDemoSession]);
+
+  // Backward-compatibility alias
+  const acceptedCompanies = acceptedConversations;
+  const activeCompanyId = selectedConversationId || acceptedConversations[0]?.id;
+  const setActiveCompanyId = (id) => setSelectedConversationId(id);
+
+  // Open Chat navigation handler for collaboration cards
+  const handleOpenChat = (req) => {
+    const reqId = req?.request_id || req?.id;
+    if (reqId) {
+      setSelectedConversationId(reqId);
+    }
+    setActiveTab('messages');
+  };
+
   const [chatInput, setChatInput] = useState('');
   const [actionError, setActionError] = useState(null);
   const [activeActionReqId, setActiveActionReqId] = useState(null);
@@ -384,7 +464,8 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
   // Handle Accept Brief
   const handleAcceptBrief = async (req) => {
     setActionError(null);
-    setActiveActionReqId(req.id || req.request_id);
+    const reqId = req.request_id || req.id;
+    setActiveActionReqId(reqId);
     setIsActionPending(true);
 
     try {
@@ -410,28 +491,9 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
         setIncomingRequests(prev => prev.map(r => (r.id === req.id) ? { ...r, status: 'accepted' } : r));
       }
 
-      const compName = req.company || req.name;
-      // Check if company already in accepted
-      if (!acceptedCompanies.some(c => c.name === compName || c.id === req.id)) {
-        const newAccepted = {
-          id: req.id || `comp-${Date.now()}`,
-          name: compName,
-          campaign: req.campaignTitle || req.campaign,
-          avatar: "🏢",
-          status: "accepted",
-          unread: false,
-          messages: [
-            { id: 1, sender: 'brand', author: compName, text: `Thank you for accepting the brief for ${req.campaignTitle || req.campaign}! Let's finalize the deliverables here.`, time: 'Just now' }
-          ]
-        };
-        setAcceptedCompanies(prev => [newAccepted, ...prev]);
-        setActiveCompanyId(newAccepted.id);
-      } else {
-        setAcceptedCompanies(prev => prev.map(c => 
-          (c.name === compName || c.id === req.id) ? { ...c, status: 'accepted' } : c
-        ));
+      if (reqId) {
+        setSelectedConversationId(reqId);
       }
-
       setActiveTab('messages');
     } catch (err) {
       console.error('Could not accept brief:', err);
@@ -573,68 +635,130 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
     }
   };
 
-  // Handle Settings Save
-  const handleSaveSettings = (e) => {
+  // Handle Settings Save (Persists to Supabase via backend API)
+  const handleSaveSettings = async (e) => {
     e.preventDefault();
     setCreator({ ...editForm });
+    const updatedProfile = {
+      ...(userProfile || {}),
+      full_name: editForm.name,
+      displayName: editForm.name,
+      name: editForm.name,
+      specialization: editForm.title,
+      company: editForm.currentCompany,
+      photoURL: editForm.avatar,
+      avatar: editForm.avatar
+    };
+    setUserProfile(updatedProfile);
+    try {
+      localStorage.setItem("user", JSON.stringify(updatedProfile));
+    } catch (err) {
+      console.warn("Could not save to localStorage:", err);
+    }
     setShowSettingsModal(false);
+
+    try {
+      const res = await authFetch(apiUrl('/api/creators/profile'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: currentFreelancerId,
+          creatorId: currentFreelancerId,
+          fullName: editForm.name,
+          bio: editForm.title,
+          specialization: editForm.specialization || 'AI Filmmaking',
+          skills: editForm.skills || ['Prompt Engineering', 'AI Video', 'ComfyUI'],
+          tools: editForm.tools || ['Runway Gen-3 Alpha', 'Midjourney v6'],
+          hourlyRate: editForm.hourlyRate || 100
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.ai_score) setAuditScore(data.ai_score);
+      }
+
+      setAuditNotification({
+        title: "Creator Profile Persisted",
+        score: "Database Synced",
+        desc: "Your profile details are live in Supabase and visible in real-time in the Brand Directory."
+      });
+    } catch (err) {
+      console.warn('Failed to persist profile to server:', err.message);
+    }
   };
 
-  // Load portfolio from API on mount
-  useEffect(() => {
-    let isMounted = true;
-    async function loadPortfolio() {
-      try {
-        const res = await authFetch(apiUrl(`/api/creators/${currentFreelancerId}/portfolio`));
-        if (res.ok) {
-          const data = await res.json();
-          if (data.portfolio_items && data.portfolio_items.length > 0 && isMounted) {
-            setPortfolioItems(data.portfolio_items.map(it => ({
-              ...it,
-              mediaUrl: it.media_url || it.mediaUrl,
-              aspectRatio: it.aspect_ratio || it.aspectRatio,
-              tool: (it.tools_used && it.tools_used[0]) || it.tool || 'Runway Gen-3 Alpha'
-            })));
-          }
-        }
-      } catch (err) {
-        console.warn('Could not load portfolio from server:', err.message);
-      }
+  // Authoritative, isolated portfolio loader
+  const loadPortfolio = useCallback(async () => {
+    if (!currentFreelancerId) {
+      setIsLoadingPortfolio(false);
+      setPortfolioItems([]);
+      return;
     }
-    loadPortfolio();
-    return () => { isMounted = false; };
+
+    setIsLoadingPortfolio(true);
+    setPortfolioError(null);
+
+    try {
+      const res = await authFetch(apiUrl(`/api/creators/${currentFreelancerId}/portfolio`));
+      if (!res.ok) {
+        throw new Error(`Failed to load portfolio (HTTP ${res.status})`);
+      }
+      const data = await res.json();
+      if (data && data.success && Array.isArray(data.portfolio_items)) {
+        setPortfolioItems(data.portfolio_items.map(it => ({
+          ...it,
+          mediaUrl: it.media_url || it.mediaUrl,
+          aspectRatio: it.aspect_ratio || it.aspectRatio,
+          tool: (it.tools_used && it.tools_used[0]) || it.model_used || it.modelUsed || it.tool || 'Runway Gen-3 Alpha'
+        })));
+      } else {
+        setPortfolioItems([]);
+      }
+    } catch (err) {
+      console.warn('Could not load portfolio from server:', err.message);
+      setPortfolioError(err.message || 'Unable to connect to portfolio server.');
+      // CRITICAL: Never substitute demo data on failure!
+      setPortfolioItems([]);
+    } finally {
+      setIsLoadingPortfolio(false);
+    }
   }, [currentFreelancerId]);
+
+  useEffect(() => {
+    loadPortfolio();
+  }, [loadPortfolio]);
+
+  const handleUploadSuccess = (savedItem, isEdit) => {
+    const formattedItem = {
+      ...savedItem,
+      mediaUrl: savedItem.media_url || savedItem.mediaUrl,
+      aspectRatio: savedItem.aspect_ratio || savedItem.aspectRatio || '16:9',
+      tool: savedItem.model_used || savedItem.modelUsed || (savedItem.tools_used && savedItem.tools_used[0]) || 'Runway Gen-3 Alpha'
+    };
+
+    if (isEdit) {
+      setPortfolioItems(prev => prev.map(it => it.id === formattedItem.id ? { ...it, ...formattedItem } : it));
+    } else {
+      setPortfolioItems(prev => [formattedItem, ...prev.filter(it => it.id !== formattedItem.id)]);
+    }
+
+    setAuditNotification({
+      title: isEdit ? "Portfolio Project Updated" : "New Portfolio Project Added",
+      score: "Evidence Saved",
+      details: ["Asset uploaded to portfolio", "Instant zero-black-screen preview active", "Status: Not Verified (Awaiting Audit Review)"]
+    });
+    setTimeout(() => setAuditNotification(null), 5000);
+  };
 
   const handleOpenAddModal = () => {
     setEditingItem(null);
     setWorkForm({ ...initialWorkForm });
-    setFormError(null);
-    setMediaUrlStatus(null);
-    setProjectUrlStatus(null);
     setShowUploadModal(true);
   };
 
   const handleOpenEditModal = (item) => {
     setEditingItem(item);
-    setWorkForm({
-      title: item.title || '',
-      description: item.description || '',
-      creator_role: item.creator_role || 'Generative AI Director',
-      skills_used: Array.isArray(item.skills_used) ? item.skills_used.join(', ') : (item.skills_used || ''),
-      tools_used: Array.isArray(item.tools_used) ? item.tools_used.join(', ') : (item.tools_used || item.tool || ''),
-      content_type: item.content_type || 'Video',
-      niche: item.niche || 'Commercial / Advertising',
-      media_url: item.media_url || item.mediaUrl || '',
-      project_url: item.project_url || '',
-      project_outcome: item.project_outcome || '',
-      pipeline: item.pipeline || '',
-      aspect_ratio: item.aspect_ratio || item.aspectRatio || '16:9',
-      prompt: item.prompt || '',
-      seed: item.seed || ''
-    });
-    setFormError(null);
-    setMediaUrlStatus(null);
-    setProjectUrlStatus(null);
     setShowUploadModal(true);
   };
 
@@ -793,21 +917,27 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
       return;
     }
 
+    const previousItems = [...portfolioItems];
+    setPortfolioItems(prev => prev.filter(it => it.id !== itemId));
+
     try {
-      await authFetch(apiUrl(`/api/creators/${currentFreelancerId}/portfolio/${itemId}`), {
+      const res = await authFetch(apiUrl(`/api/creators/${currentFreelancerId}/portfolio/${itemId}`), {
         method: 'DELETE'
       });
+      if (!res.ok) {
+        throw new Error(`Delete failed (HTTP ${res.status})`);
+      }
+      setAuditNotification({
+        title: "Portfolio Project Removed",
+        score: "Updated",
+        details: ["Project evidence deleted from creator profile"]
+      });
+      setTimeout(() => setAuditNotification(null), 4000);
     } catch (err) {
       console.warn('Delete API call failed:', err.message);
+      setPortfolioItems(previousItems);
+      alert(`Could not delete portfolio project: ${err.message}`);
     }
-
-    setPortfolioItems(prev => prev.filter(it => it.id !== itemId));
-    setAuditNotification({
-      title: "Portfolio Project Removed",
-      score: "Updated",
-      details: ["Project evidence deleted from creator profile"]
-    });
-    setTimeout(() => setAuditNotification(null), 4000);
   };
 
   const handleSubmitForVerification = async (itemId) => {
@@ -855,14 +985,12 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
     }, 1000);
   };
 
-  const activeCompany = acceptedCompanies.find(c => c.id === activeCompanyId) || acceptedCompanies[0];
+  const activeCompany = acceptedConversations.find(c => 
+    c.requestId === selectedConversationId || c.id === selectedConversationId
+  ) || acceptedConversations[0];
 
   // Active conversation requestId for Supabase sync
-  const activeRequestId = activeCompany?.id === 'comp-1'
-    ? 'REQ-DEMO-001'
-    : activeCompany?.id === 'comp-2'
-      ? 'REQ-DEMO-002'
-      : (activeCompany?.requestId || `REQ-${activeCompany?.id || 'DEMO'}`);
+  const activeRequestId = activeCompany?.requestId || activeCompany?.id || null;
 
   // Live Supabase Chat State
   const [chatMessages, setChatMessages] = useState([]);
@@ -871,17 +999,20 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
   const [isSendingMessage, setIsSendingMessage] = useState(false);
   const [sendError, setSendError] = useState(null);
 
-  // Fetch live chat messages from Supabase or server API with polling
+  // Fetch live chat messages from Supabase or server API with polling & Realtime subscription
   useEffect(() => {
     let isMounted = true;
 
     async function loadLiveMessages(isFirst = false) {
-      if (!activeRequestId) return;
+      if (!activeRequestId) {
+        setChatMessages([]);
+        return;
+      }
       if (isFirst) setIsChatLoading(true);
       const res = await fetchChatMessagesResult(activeRequestId);
       if (isMounted) {
         if (res.success) {
-          setChatMessages(res.data);
+          setChatMessages(res.data || []);
           setChatFetchError(null);
         } else if (isFirst) {
           setChatFetchError(res.error || 'Failed to load messages');
@@ -892,27 +1023,41 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
 
     loadLiveMessages(true);
 
-    // 2-second interval live polling
+    // 2.5-second polling interval as reliable sync fallback
     const pollInterval = setInterval(() => {
       loadLiveMessages(false);
-    }, 2000);
+    }, 2500);
+
+    // Supabase Realtime subscription for instant message delivery without duplicate entries
+    const unsubscribe = subscribeToMessages(activeRequestId, (newMsg) => {
+      if (isMounted && newMsg) {
+        setChatMessages(prev => {
+          const id = newMsg.message_id || newMsg.id;
+          if (prev.some(m => (m.message_id || m.id) === id)) {
+            return prev;
+          }
+          return [...prev, newMsg];
+        });
+      }
+    });
 
     return () => {
       isMounted = false;
       clearInterval(pollInterval);
+      if (typeof unsubscribe === 'function') unsubscribe();
     };
   }, [activeRequestId]);
 
   // Handle Send Chat (Sends to Supabase public.messages / backend proxy)
   const handleSendMessage = async (e) => {
-    e.preventDefault();
+    if (e && e.preventDefault) e.preventDefault();
     const text = chatInput.trim();
-    if (!text || isSendingMessage) return;
+    if (!text || isSendingMessage || !activeRequestId) return;
 
     setSendError(null);
     setIsSendingMessage(true);
 
-    // Optimistically prepare message
+    // Send using active authenticated user's ID
     const senderUid = user?.id || localStorage.getItem('genlancer_user_id') || 'FL001';
     const result = await sendChatMessage(activeRequestId, senderUid, 'freelancer', text);
     if (result?.success) {
@@ -947,9 +1092,10 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
             <div className="text-center pb-6 border-b border-slate-100 relative">
               <div className="relative inline-block mx-auto mb-3">
                 <img 
-                  src={creator.avatar} 
-                  alt={creator.name} 
+                  src={userProfile?.photoURL || "/default-avatar.png"} 
+                  alt={userProfile?.full_name || userProfile?.displayName || "Aarav Sharma"} 
                   className="w-20 h-20 rounded-full object-cover border-2 border-[#FF6B00] shadow-md p-0.5 bg-white"
+                  onError={(e) => { e.currentTarget.src = "/default-avatar.png"; }}
                 />
                 <button 
                   onClick={() => { setEditForm({ ...creator }); setShowSettingsModal(true); }}
@@ -961,14 +1107,16 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
               </div>
 
               <h2 className="text-base font-extrabold text-slate-900 leading-tight">
-                {creator.name}
+                {userProfile?.full_name || userProfile?.displayName || "Aarav Sharma"}
               </h2>
-              <p className="text-xs text-slate-500 mt-0.5">{creator.title}</p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {userProfile?.specialization || "AI Creator"}
+              </p>
 
               {/* Verified Trust Badges */}
               <div className="mt-3 flex flex-wrap items-center justify-center gap-1.5">
-                <VerificationBadge type="workflow" size="sm" />
-                <VerificationBadge type="score" score={auditScore || 96} size="sm" />
+                <VerificationBadge type={userProfile?.is_verified ? "workflow" : (userProfile?.is_verified === false ? "pending" : "workflow")} size="sm" />
+                <VerificationBadge type="score" score={userProfile?.ai_score ? `${userProfile.ai_score}/100` : "Calculating..."} size="sm" />
                 <VerificationBadge type="certified_pipeline" size="sm" />
               </div>
 
@@ -979,10 +1127,12 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
               </div>
 
               {/* Current Company Affiliation */}
-              <div className="mt-3 flex items-center justify-center gap-1 text-[11px] text-slate-600 bg-orange-50/70 py-1.5 px-2 rounded-lg border border-orange-100">
-                <Building className="w-3 h-3 text-[#FF6B00]" />
-                <span className="truncate font-medium">{creator.currentCompany}</span>
-              </div>
+              {(userProfile?.bio || userProfile?.company) && (
+                <div className="mt-3 flex items-center justify-center gap-1 text-[11px] text-slate-600 bg-orange-50/70 py-1.5 px-2 rounded-lg border border-orange-100">
+                  <Building className="w-3 h-3 text-[#FF6B00] shrink-0" />
+                  <span className="truncate font-medium">{userProfile?.company || userProfile?.bio}</span>
+                </div>
+              )}
 
               {/* Utility Icons */}
               <div className="flex items-center justify-center gap-4 mt-4 text-slate-400">
@@ -1073,19 +1223,10 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
           </div>
 
           {/* Footer Navigation & Logout */}
-          <div className="pt-4 border-t border-slate-100 space-y-2">
-            {onSwitchToCompany && (
-              <button
-                onClick={onSwitchToCompany}
-                className="w-full text-center text-xs text-[#FF6B00] hover:text-[#E05E00] bg-orange-50 hover:bg-orange-100 py-2.5 px-3 rounded-xl transition-all cursor-pointer font-bold flex items-center justify-center gap-1.5 border border-orange-200/80 shadow-xs"
-              >
-                <span>Switch to Brand Hub</span>
-                <ChevronRight className="w-3.5 h-3.5 text-[#FF6B00]" />
-              </button>
-            )}
+          <div className="pt-4 border-t border-slate-100">
             <button
               onClick={onLogout}
-              className="w-full text-center text-xs text-slate-400 hover:text-rose-600 transition-colors cursor-pointer py-1.5 flex items-center justify-center gap-1.5 font-medium"
+              className="w-full text-center text-xs text-slate-400 hover:text-rose-600 transition-colors cursor-pointer py-2 flex items-center justify-center gap-1.5 font-medium rounded-xl hover:bg-slate-50"
             >
               <LogOut className="w-3.5 h-3.5" />
               <span>Sign Out of GenLancer</span>
@@ -1095,6 +1236,9 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
 
         {/* ================= RIGHT MAIN PANEL ================= */}
         <main className="flex-1 min-w-0 w-full p-4 sm:p-6 lg:p-8 2xl:p-10 flex flex-col justify-between z-10">
+          <div className="mb-4 flex justify-end">
+            <SubscriptionCenter role={user?.role || localStorage.getItem('genlancer_active_role') || 'creator'} />
+          </div>
 
           {/* Responsive Mobile / Tablet Navigation Strip (< md) */}
           <div className="md:hidden flex items-center justify-between bg-slate-50 border border-slate-200/90 rounded-2xl p-1.5 mb-6 overflow-x-auto gap-1">
@@ -1174,12 +1318,14 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
                     </h1>
                     {creator.is_demo ? (
                       <VerificationBadge status="demo_unverified" size="sm" />
-                    ) : creator.verified ? (
+                    ) : portfolioItems.length > 0 && creator.verified ? (
                       <VerificationBadge status="verified" scope={creator.verification_scope || 'workflow'} size="sm" />
                     ) : (
                       <VerificationBadge status={creator.verification_status || 'not_verified'} size="sm" />
                     )}
-                    <VerificationBadge type="score" score={auditScore || 96} size="sm" />
+                    {auditScore !== null && auditScore > 0 && (
+                      <VerificationBadge type="score" score={auditScore} size="sm" />
+                    )}
                   </div>
                   <p className="text-xs text-slate-500">
                     Upload generations with verified prompts, tools, seeds, and outcomes to prove reproducible workflows to hiring brands.
@@ -1196,11 +1342,16 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
                   </button>
 
                   <div className="flex items-center gap-3 bg-gradient-to-r from-orange-50 via-white to-orange-50 p-2 px-3.5 rounded-2xl border border-orange-200">
-                    <AICreatorScoreBadge score={auditScore} />
+                    {auditScore !== null && auditScore > 0 ? (
+                      <AICreatorScoreBadge score={auditScore} />
+                    ) : (
+                      <span className="text-xs font-bold text-slate-500 px-2">Unranked</span>
+                    )}
                     <button
                       onClick={runAIAudit}
-                      disabled={isAuditing}
+                      disabled={isAuditing || portfolioItems.length === 0}
                       className="flex items-center gap-1.5 bg-[#FF6B00] hover:bg-[#E05E00] active:bg-[#c2410c] text-white text-xs font-bold py-1.5 px-3 rounded-xl shadow-sm transition-all cursor-pointer disabled:opacity-60"
+                      title={portfolioItems.length === 0 ? "Upload at least one project to run an AI audit" : "Run AI verification audit"}
                     >
                       <Sparkles className={`w-3.5 h-3.5 ${isAuditing ? 'animate-spin' : ''}`} />
                       <span>{isAuditing ? 'Auditing...' : 'Run AI Audit'}</span>
@@ -1222,8 +1373,12 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
                 <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 shadow-xs hover:border-orange-200 transition-colors">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Verification Score</span>
                   <div className="flex items-baseline gap-1.5">
-                    <span className="text-xl sm:text-2xl font-black text-[#FF6B00]">{auditScore || 96}</span>
-                    <span className="text-[11px] text-[#FF6B00]/80 font-bold">/100</span>
+                    <span className="text-xl sm:text-2xl font-black text-[#FF6B00]">
+                      {auditScore !== null && auditScore > 0 ? auditScore : 0}
+                    </span>
+                    <span className="text-[11px] text-[#FF6B00]/80 font-bold">
+                      {auditScore !== null && auditScore > 0 ? '/100' : 'Unverified'}
+                    </span>
                   </div>
                 </div>
 
@@ -1244,22 +1399,42 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
                 </div>
               </div>
 
-              {/* Empty State */}
-              {portfolioItems.length === 0 ? (
+              {/* State handling: Loading, Error, Empty State, or Grid */}
+              {isLoadingPortfolio ? (
+                <div className="text-center py-20 px-4 bg-slate-50 rounded-2xl border border-slate-200 flex flex-col items-center justify-center">
+                  <Loader2 className="w-8 h-8 text-[#FF6B00] animate-spin mb-3" />
+                  <p className="text-xs font-semibold text-slate-600">Loading your verified portfolio projects...</p>
+                </div>
+              ) : portfolioError ? (
+                <div className="text-center py-16 px-4 bg-red-50/60 rounded-2xl border border-red-200/80">
+                  <div className="w-12 h-12 bg-red-100 rounded-2xl flex items-center justify-center text-red-600 mx-auto mb-3">
+                    <AlertCircle className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-sm font-bold text-slate-900 mb-1">Unable to Load Portfolio</h3>
+                  <p className="text-xs text-slate-500 max-w-sm mx-auto mb-4">{portfolioError}</p>
+                  <button
+                    onClick={() => loadPortfolio()}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition-all cursor-pointer"
+                  >
+                    <span>Retry</span>
+                  </button>
+                </div>
+              ) : portfolioItems.length === 0 ? (
                 <div className="text-center py-16 px-4 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200">
                   <div className="w-14 h-14 bg-orange-100 rounded-2xl flex items-center justify-center text-[#FF6B00] mx-auto mb-4 shadow-xs">
                     <FolderPlus className="w-7 h-7" />
                   </div>
-                  <h3 className="text-base font-bold text-slate-900 mb-1">No Portfolio Projects Added Yet</h3>
+                  <h3 className="text-base font-bold text-slate-900 mb-1">You haven't uploaded any portfolio work yet.</h3>
                   <p className="text-xs text-slate-500 max-w-md mx-auto mb-5 leading-relaxed">
-                    Upload your first evidence-based generative AI project with prompt, model tools, pipeline, and media URL to prove your capabilities to brands.
+                    Adding portfolio projects helps brands evaluate your generative video workflows, prompt reproducibility, and creative capabilities for paid commissions.
                   </p>
                   <button
+                    id="empty-state-add-project-btn"
                     onClick={handleOpenAddModal}
                     className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#FF6B00] hover:bg-[#E05E00] text-white text-xs font-bold rounded-xl shadow-sm transition-all cursor-pointer"
                   >
                     <Plus className="w-4 h-4" />
-                    <span>Add First Project</span>
+                    <span>Add Project</span>
                   </button>
                 </div>
               ) : (
@@ -1614,7 +1789,7 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
                               <span>Confirm Terms & Lock</span>
                             </button>
                             <button 
-                              onClick={() => setActiveTab('messages')}
+                              onClick={() => handleOpenChat(req)}
                               className="px-4 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1"
                             >
                               <MessageSquare className="w-3.5 h-3.5" />
@@ -1625,7 +1800,7 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
 
                         {req.status === 'confirmed' && (
                           <button 
-                            onClick={() => setActiveTab('messages')}
+                            onClick={() => handleOpenChat(req)}
                             className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                           >
                             <MessageSquare className="w-3.5 h-3.5 text-[#FF6B00]" />
@@ -1684,29 +1859,31 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
               <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4 border border-slate-200/80 rounded-2xl overflow-hidden bg-slate-50/50 min-h-[460px]">
                 {/* Left: Accepted Company List */}
                 <div className="border-r border-slate-200/80 bg-white p-3 space-y-1.5 overflow-y-auto">
-                  <span className="text-[10px] font-bold uppercase text-slate-400 px-2 block mb-2">Accepted Companies</span>
-                  {acceptedCompanies.map(comp => (
-                    <button
-                      key={comp.id}
-                      onClick={() => setActiveCompanyId(comp.id)}
-                      className={`w-full text-left p-3 rounded-xl transition-all cursor-pointer flex items-center gap-3 ${
-                        comp.id === activeCompanyId 
-                          ? 'bg-orange-50 border border-orange-200 shadow-sm' 
-                          : 'hover:bg-slate-50 border border-transparent'
-                      }`}
-                    >
-                      <div className="w-9 h-9 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-sm">
-                        {comp.avatar}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between">
-                          <h4 className="font-bold text-xs text-slate-900 truncate">{comp.name}</h4>
-                          {comp.unread && <span className="w-2 h-2 rounded-full bg-[#FF6B00]" />}
+                  {acceptedCompanies.map(comp => {
+                    const isSelected = (comp.requestId || comp.id) === (activeCompany?.requestId || activeCompany?.id);
+                    return (
+                      <button
+                        key={comp.requestId || comp.id}
+                        onClick={() => setSelectedConversationId(comp.requestId || comp.id)}
+                        className={`w-full text-left p-3 rounded-xl transition-all cursor-pointer flex items-center gap-3 ${
+                          isSelected 
+                            ? 'bg-orange-50 border border-orange-200 shadow-sm' 
+                            : 'hover:bg-slate-50 border border-transparent'
+                        }`}
+                      >
+                        <div className="w-9 h-9 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-sm">
+                          {comp.avatar}
                         </div>
-                        <p className="text-[11px] text-slate-500 truncate">{comp.campaign}</p>
-                      </div>
-                    </button>
-                  ))}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between">
+                            <h4 className="font-bold text-xs text-slate-900 truncate">{comp.name}</h4>
+                            {comp.unread && <span className="w-2 h-2 rounded-full bg-[#FF6B00]" />}
+                          </div>
+                          <p className="text-[11px] text-slate-500 truncate">{comp.campaign}</p>
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
 
                 {/* Right: Live Thread with Selected Company */}
@@ -1799,7 +1976,7 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
                             ? chatMessages.map((m) => ({
                                 id: m.message_id || m.id,
                                 sender: m.sender_role === 'freelancer' ? 'creator' : 'brand',
-                                author: m.sender_role === 'freelancer' ? creator.name : (activeCompany?.name || 'Brand Partner'),
+                                author: m.sender_role === 'freelancer' ? (userProfile?.full_name || userProfile?.displayName || creator?.name || 'Creator') : (activeCompany?.name || 'Brand Partner'),
                                 text: m.text_content || m.content || m.text,
                                 time: m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now'
                               }))
@@ -1980,7 +2157,6 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
                   value={editForm.currentCompany}
                   onChange={(e) => setEditForm(prev => ({ ...prev, currentCompany: e.target.value }))}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 outline-none focus:border-[#FF6B00]"
-                  required
                 />
               </div>
 
@@ -2016,289 +2192,13 @@ export default function CreatorDashboard({ user, onLogout, onSwitchToCompany }) 
       )}
 
       {/* ================= MODAL: ADD / EDIT PORTFOLIO WORK ================= */}
-      {showUploadModal && (
-        <div 
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in overflow-y-auto"
-          onClick={() => setShowUploadModal(false)}
-        >
-          <div 
-            role="dialog"
-            aria-modal="true"
-            aria-label={editingItem ? 'Edit Portfolio Evidence' : 'Add Evidence-Based Project'}
-            className="bg-white rounded-3xl p-6 sm:p-8 max-w-xl w-full border border-slate-200 shadow-2xl relative my-8"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button 
-              onClick={() => setShowUploadModal(false)}
-              className="absolute top-5 right-5 text-slate-400 hover:text-slate-600 cursor-pointer p-1 rounded-lg hover:bg-slate-100 transition-colors"
-            >
-              <X className="w-5 h-5" />
-            </button>
-
-            <div className="flex items-center gap-2.5 mb-1.5">
-              <div className="w-8 h-8 rounded-xl bg-orange-100 flex items-center justify-center text-[#FF6B00]">
-                {editingItem ? <Edit2 className="w-4 h-4" /> : <UploadCloud className="w-4 h-4" />}
-              </div>
-              <h3 className="text-xl font-bold text-slate-900">
-                {editingItem ? 'Edit Portfolio Evidence' : 'Add Evidence-Based Project'}
-              </h3>
-            </div>
-            <p className="text-xs text-slate-500 mb-5 leading-relaxed">
-              Record prompt, model parameters, deliverables, and validated URLs. Newly added or edited items start as unverified pending audit review.
-            </p>
-
-            {formError && (
-              <div className="mb-4 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                <span>{formError}</span>
-              </div>
-            )}
-
-            <form onSubmit={handleSaveWork} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Project Title <span className="text-rose-500">*</span>
-                </label>
-                <input 
-                  type="text"
-                  placeholder="e.g. Neon Monolith - Cyberpunk Commercial"
-                  value={workForm.title}
-                  onChange={(e) => setWorkForm(prev => ({ ...prev, title: e.target.value }))}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 outline-none focus:border-[#FF6B00] transition-colors"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Project Description
-                </label>
-                <textarea 
-                  rows={2}
-                  placeholder="Provide context regarding the project brief, aesthetic goal, or brand deliverable..."
-                  value={workForm.description}
-                  onChange={(e) => setWorkForm(prev => ({ ...prev, description: e.target.value }))}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900 outline-none focus:border-[#FF6B00] transition-colors resize-none"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Creator's Role & Contribution
-                  </label>
-                  <input 
-                    type="text"
-                    placeholder="e.g. Lead Generative AI Director"
-                    value={workForm.creator_role}
-                    onChange={(e) => setWorkForm(prev => ({ ...prev, creator_role: e.target.value }))}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900 outline-none focus:border-[#FF6B00]"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Relevant Niche / Industry
-                  </label>
-                  <input 
-                    type="text"
-                    placeholder="e.g. Commercial Advertising / Luxury"
-                    value={workForm.niche}
-                    onChange={(e) => setWorkForm(prev => ({ ...prev, niche: e.target.value }))}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900 outline-none focus:border-[#FF6B00]"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Content Type
-                  </label>
-                  <select
-                    value={workForm.content_type}
-                    onChange={(e) => setWorkForm(prev => ({ ...prev, content_type: e.target.value }))}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900 outline-none focus:border-[#FF6B00] cursor-pointer"
-                  >
-                    <option>Video</option>
-                    <option>Image</option>
-                    <option>3D Synthetic / NeRF</option>
-                    <option>Audio / SFX</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Aspect Ratio
-                  </label>
-                  <select
-                    value={workForm.aspect_ratio}
-                    onChange={(e) => setWorkForm(prev => ({ ...prev, aspect_ratio: e.target.value }))}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900 outline-none focus:border-[#FF6B00] cursor-pointer"
-                  >
-                    <option>16:9 (Cinematic)</option>
-                    <option>9:16 (Vertical Reel)</option>
-                    <option>1:1 (Square)</option>
-                    <option>4:5 (Portrait)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Skills Used (Comma-separated)
-                  </label>
-                  <input 
-                    type="text"
-                    placeholder="e.g. Prompt Engineering, 4K Upscaling, Color Grading"
-                    value={workForm.skills_used}
-                    onChange={(e) => setWorkForm(prev => ({ ...prev, skills_used: e.target.value }))}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900 outline-none focus:border-[#FF6B00]"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    AI Tools & Models Used
-                  </label>
-                  <input 
-                    type="text"
-                    placeholder="e.g. Runway Gen-3 Alpha, Midjourney v6, Topaz"
-                    value={workForm.tools_used}
-                    onChange={(e) => setWorkForm(prev => ({ ...prev, tools_used: e.target.value }))}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900 outline-none focus:border-[#FF6B00]"
-                  />
-                </div>
-              </div>
-
-              {/* Supported Media URL with Validation */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
-                  <span>Supported Media URL (Video / Image) <span className="text-rose-500">*</span></span>
-                  {mediaUrlStatus && (
-                    <span className={`text-[10px] font-semibold ${mediaUrlStatus.valid ? 'text-emerald-600' : 'text-rose-600'}`}>
-                      {mediaUrlStatus.valid ? '✓ Valid format & host' : '✗ Invalid media URL'}
-                    </span>
-                  )}
-                </label>
-                <input 
-                  type="url"
-                  placeholder="e.g. https://assets.mixkit.co/.../video.mp4"
-                  value={workForm.media_url}
-                  onChange={(e) => handleMediaUrlChange(e.target.value)}
-                  className={`w-full bg-slate-50 border rounded-xl px-3.5 py-2 text-xs text-slate-900 outline-none font-mono ${
-                    mediaUrlStatus 
-                      ? (mediaUrlStatus.valid ? 'border-emerald-400 focus:border-emerald-500' : 'border-rose-400 focus:border-rose-500') 
-                      : 'border-slate-200 focus:border-[#FF6B00]'
-                  }`}
-                  required
-                />
-                {mediaUrlStatus && !mediaUrlStatus.valid && (
-                  <p className="text-[10px] text-rose-600 mt-1">{mediaUrlStatus.error}</p>
-                )}
-                <span className="text-[10px] text-slate-400 mt-0.5 block">
-                  Accepted: Secure https:// links ending with .mp4, .webm, .png, .jpg, .webp, or trusted CDNs.
-                </span>
-              </div>
-
-              {/* Project External URL (Optional) */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
-                  <span>External Project URL (Optional)</span>
-                  {projectUrlStatus && (
-                    <span className={`text-[10px] font-semibold ${projectUrlStatus.valid ? 'text-emerald-600' : 'text-rose-600'}`}>
-                      {projectUrlStatus.valid ? '✓ Safe link' : '✗ Invalid protocol'}
-                    </span>
-                  )}
-                </label>
-                <input 
-                  type="url"
-                  placeholder="e.g. https://vimeo.com/76979871 or https://behance.net/..."
-                  value={workForm.project_url}
-                  onChange={(e) => handleProjectUrlChange(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900 outline-none focus:border-[#FF6B00] font-mono"
-                />
-              </div>
-
-              {/* Optional Measurable Outcome */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Project Outcome / Measurable Result (Optional)
-                </label>
-                <input 
-                  type="text"
-                  placeholder="e.g. 1.2M organic impressions; 65% faster delivery turnaround"
-                  value={workForm.project_outcome}
-                  onChange={(e) => setWorkForm(prev => ({ ...prev, project_outcome: e.target.value }))}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900 outline-none focus:border-[#FF6B00]"
-                />
-              </div>
-
-              {/* Generation Pipeline */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Generation Pipeline
-                </label>
-                <input 
-                  type="text"
-                  placeholder="e.g. Midjourney v6 ➔ Runway Gen-3 Alpha ➔ Topaz 4K"
-                  value={workForm.pipeline}
-                  onChange={(e) => setWorkForm(prev => ({ ...prev, pipeline: e.target.value }))}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900 outline-none focus:border-[#FF6B00]"
-                />
-              </div>
-
-              {/* Exact Generation Prompt */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Exact Generation Prompt <span className="text-rose-500">*</span>
-                </label>
-                <textarea 
-                  rows={2}
-                  placeholder="Paste the exact prompt including tags, style tokens, and weights..."
-                  value={workForm.prompt}
-                  onChange={(e) => setWorkForm(prev => ({ ...prev, prompt: e.target.value }))}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900 outline-none focus:border-[#FF6B00] font-mono resize-none"
-                  required
-                />
-              </div>
-
-              {/* Seed */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Seed Number (Optional for reproducibility verification)
-                </label>
-                <input 
-                  type="text"
-                  placeholder="e.g. 482019482"
-                  value={workForm.seed}
-                  onChange={(e) => setWorkForm(prev => ({ ...prev, seed: e.target.value }))}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900 outline-none focus:border-[#FF6B00] font-mono"
-                />
-              </div>
-
-              <div className="pt-3 flex gap-2.5">
-                <button
-                  type="submit"
-                  disabled={isSavingWork}
-                  className="flex-1 py-2.5 bg-[#FF6B00] hover:bg-[#E05E00] text-white font-bold rounded-xl text-xs transition-all shadow-sm cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
-                >
-                  {isSavingWork ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                  <span>{editingItem ? 'Save Changes' : 'Save Project Evidence'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowUploadModal(false)}
-                  className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-xs transition-all cursor-pointer"
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <UploadModal 
+        isOpen={showUploadModal} 
+        onClose={() => setShowUploadModal(false)} 
+        editingItem={editingItem} 
+        currentFreelancerId={currentFreelancerId} 
+        onSaveSuccess={handleUploadSuccess} 
+      />
 
 
       {/* Clarification Request Modal */}

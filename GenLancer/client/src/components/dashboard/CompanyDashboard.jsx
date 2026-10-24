@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import SubscriptionCenter from './SubscriptionCenter';
 import { 
   Search, 
   Filter, 
@@ -40,7 +41,7 @@ import {
 import GenLancerLogo from '../auth/GenLancerLogo';
 import { supabase, isSupabaseConfigured, authFetch } from '../../lib/supabase';
 import { apiUrl } from '../../lib/apiConfig';
-import { sendChatMessage, fetchChatMessages, fetchChatMessagesResult } from '../../lib/chatService';
+import { sendChatMessage, fetchChatMessages, fetchChatMessagesResult, subscribeToMessages } from '../../lib/chatService';
 import PromptInspectorModal from '../common/PromptInspectorModal';
 import MatchingReportModal from '../common/MatchingReportModal';
 import ChatLockoutOverlay from '../common/ChatLockoutOverlay';
@@ -53,310 +54,7 @@ import CreatorProfileView from './CreatorProfileView';
 import CollaborationRequestModal from './CollaborationRequestModal';
 import { resolvePoster, isLikelyVideo, AI_MEDIA_PRESETS } from '../../lib/mediaAssets';
 
-// Static Fallback Creators Database with Verified AI Portfolios
-const MOCK_CREATORS = [
-  {
-    id: 'c1',
-    name: 'Alex Smith',
-    title: 'AI Film Director & Motion Specialist',
-    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300',
-    location: 'San Francisco, CA / Remote',
-    score: 98,
-    rating: 4.98,
-    completedGigs: 42,
-    hourlyRate: '$120/hr',
-    specialization: 'AI Filmmaking',
-    skills: ['Cinematography', 'Prompt Engineering', 'Fluid Sim', 'Video Editing'],
-    aiTools: ['Runway Gen-3 Alpha', 'Midjourney v6', 'Topaz 4K'],
-    primaryTools: ['Runway Gen-3 Alpha', 'Midjourney v6', 'Topaz 4K'],
-    visualStyles: ['Cyberpunk', 'Cinematic 8K', 'Photorealistic'],
-    contentTypes: ['Video'],
-    contentType: 'Video',
-    aspectRatios: ['16:9', '9:16'],
-    sampleMedia: 'https://assets.mixkit.co/videos/preview/mixkit-cyberpunk-neon-city-street-41804-large.mp4',
-    poster: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=1200&auto=format&fit=crop&q=80',
-    pipeline: 'Midjourney v6 ➔ Runway Gen-3 ➔ Topaz 4K',
-    samplePrompt: '/imagine prompt: futuristic mega-city at night, neon reflections in rainwater, anamorphic cinematic 8k --ar 16:9',
-    seed: '482019482',
-    verified: true,
-    verification_status: 'verified',
-    verification_scope: 'workflow',
-    is_demo: true,
-    portfolio: [
-      {
-        id: 'p1-1',
-        title: 'Volt Energy Cyberpunk Commercial',
-        description: '15s high-octane fluid dynamic commercial produced via Midjourney and Runway Gen-3.',
-        media_url: 'https://assets.mixkit.co/videos/preview/mixkit-cyberpunk-neon-city-street-41804-large.mp4',
-        poster: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=1200&auto=format&fit=crop&q=80',
-        thumbnail_url: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=1200&auto=format&fit=crop&q=80',
-        content_type: 'Video',
-        tool: 'Runway Gen-3 Alpha',
-        aspect_ratio: '16:9',
-        pipeline: 'Midjourney v6 ➔ Runway Gen-3 ➔ Topaz 4K',
-        prompt: '/imagine prompt: futuristic mega-city at night, neon reflections in rainwater, anamorphic cinematic 8k --ar 16:9',
-        seed: '482019482',
-        verified: true
-      },
-      {
-        id: 'p1-2',
-        title: 'Neon Drift Cinematic Teaser',
-        description: 'Atmospheric vehicle chase sequence rendering high-speed motion blur and lens flare.',
-        media_url: 'https://assets.mixkit.co/videos/preview/mixkit-futuristic-flying-car-in-a-cyberpunk-city-41807-large.mp4',
-        poster: 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=1200&auto=format&fit=crop&q=80',
-        thumbnail_url: 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=1200&auto=format&fit=crop&q=80',
-        content_type: 'Video',
-        tool: 'Runway Gen-3 Alpha',
-        aspect_ratio: '16:9',
-        pipeline: 'Runway Gen-3 ➔ DaVinci Resolve ➔ Topaz 4K',
-        prompt: 'hyper-lapse shot of autonomous aerodynamic speeder cutting through dense neon smog, rain streaks on camera lens',
-        seed: '81923019',
-        verified: true
-      }
-    ]
-  },
-  {
-    id: 'c2',
-    name: 'Maya Lin',
-    title: 'Generative Visual Architect & LoRA Specialist',
-    avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=300',
-    location: 'New York, NY / Remote',
-    score: 96,
-    rating: 4.95,
-    completedGigs: 38,
-    hourlyRate: '$110/hr',
-    specialization: 'Generative Architecture & LoRA',
-    skills: ['LoRA Training', 'ControlNet Depth', 'ComfyUI Pipelines', 'Blender Compositor'],
-    aiTools: ['Flux.1 Dev', 'ComfyUI', 'SDXL'],
-    primaryTools: ['Flux.1 Dev', 'ComfyUI', 'SDXL'],
-    visualStyles: ['Minimalist Surrealism', 'Macro Photography', 'Photorealistic'],
-    contentTypes: ['Static Graphics'],
-    contentType: 'Static Graphics',
-    aspectRatios: ['1:1', '4:5'],
-    sampleMedia: 'https://assets.mixkit.co/videos/preview/mixkit-hand-holding-a-glowing-futuristic-device-41805-large.mp4',
-    poster: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1200&auto=format&fit=crop&q=80',
-    pipeline: 'Flux.1 Dev ➔ ControlNet Depth ➔ Blender Compositor',
-    samplePrompt: 'close-up portrait of android with exposed copper neural cables, volumetric amber lighting, macro photography',
-    seed: '99102412',
-    verified: true,
-    verification_status: 'verified',
-    verification_scope: 'pipeline',
-    is_demo: true,
-    portfolio: [
-      {
-        id: 'p2-1',
-        title: 'Biomechanical Android Concept',
-        description: 'Detailed portrait study using custom Flux LoRA and ControlNet depth estimation.',
-        media_url: 'https://assets.mixkit.co/videos/preview/mixkit-hand-holding-a-glowing-futuristic-device-41805-large.mp4',
-        poster: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1200&auto=format&fit=crop&q=80',
-        thumbnail_url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1200&auto=format&fit=crop&q=80',
-        content_type: 'Static Graphics',
-        tool: 'Flux.1 Dev + ComfyUI',
-        aspect_ratio: '1:1',
-        pipeline: 'Flux.1 Dev ➔ ControlNet Depth ➔ Blender Compositor',
-        prompt: 'close-up portrait of android with exposed copper neural cables, volumetric amber lighting, macro photography',
-        seed: '99102412',
-        verified: true
-      },
-      {
-        id: 'p2-2',
-        title: 'Surrealist Architectural Monolith',
-        description: 'Zero-gravity concrete pavilion floating in terracotta desert landscape.',
-        media_url: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?w=1200&auto=format&fit=crop&q=80',
-        poster: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?w=1200&auto=format&fit=crop&q=80',
-        thumbnail_url: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?w=1200&auto=format&fit=crop&q=80',
-        content_type: 'Static Graphics',
-        tool: 'Flux.1 Dev',
-        aspect_ratio: '4:5',
-        pipeline: 'ComfyUI ➔ Flux.1 Dev ➔ Custom LoRA',
-        prompt: 'brutalist curved concrete arch in quiet desert, stark golden hour shadows, 35mm architectural photography',
-        seed: '60192834',
-        verified: true
-      }
-    ]
-  },
-  {
-    id: 'c3',
-    name: 'Carlos Rivera',
-    title: '3D Synthetic Media & Animatics Lead',
-    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300',
-    location: 'Austin, TX / Remote',
-    score: 95,
-    rating: 4.92,
-    completedGigs: 29,
-    hourlyRate: '$135/hr',
-    specialization: '3D Synthetic Media',
-    skills: ['Blender Integration', 'Camera Projections', 'VFX Motion', 'Generative Camera Tracking'],
-    aiTools: ['Kling AI 1.5', 'Luma Dream Machine', 'Blender'],
-    primaryTools: ['Kling AI 1.5', 'Luma Dream Machine', 'Blender'],
-    visualStyles: ['Sci-Fi Cityscapes', 'Hyper-Speed Drone Views'],
-    contentTypes: ['Video'],
-    contentType: 'Video',
-    aspectRatios: ['16:9', '9:16', '1:1'],
-    sampleMedia: 'https://assets.mixkit.co/videos/preview/mixkit-futuristic-flying-car-in-a-cyberpunk-city-41807-large.mp4',
-    poster: 'https://images.unsplash.com/photo-1634017839464-5c339ebe3cb4?w=1200&auto=format&fit=crop&q=80',
-    pipeline: 'Blender ➔ Kling AI 1.5 ➔ After Effects',
-    samplePrompt: 'cinematic drone follow shot of high-tech flying vehicle gliding over glowing obsidian skyscrapers',
-    seed: '772183921',
-    verified: true,
-    verification_status: 'verified',
-    verification_scope: 'workflow',
-    is_demo: true,
-    portfolio: [
-      {
-        id: 'p3-1',
-        title: 'Obsidian Spire Drone Passage',
-        description: 'Hyper-speed drone sequence over synthetic obsidian monoliths with camera projections.',
-        media_url: 'https://assets.mixkit.co/videos/preview/mixkit-futuristic-flying-car-in-a-cyberpunk-city-41807-large.mp4',
-        poster: 'https://images.unsplash.com/photo-1634017839464-5c339ebe3cb4?w=1200&auto=format&fit=crop&q=80',
-        thumbnail_url: 'https://images.unsplash.com/photo-1634017839464-5c339ebe3cb4?w=1200&auto=format&fit=crop&q=80',
-        content_type: 'Video',
-        tool: 'Kling AI 1.5',
-        aspect_ratio: '16:9',
-        pipeline: 'Blender ➔ Kling AI 1.5 ➔ After Effects',
-        prompt: 'cinematic drone follow shot of high-tech flying vehicle gliding over glowing obsidian skyscrapers',
-        seed: '772183921',
-        verified: true
-      }
-    ]
-  },
-  {
-    id: 'c4',
-    name: 'Sophia Chen',
-    title: 'Commercial AI Creative Director',
-    avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=300',
-    location: 'London, UK / Remote',
-    score: 99,
-    rating: 5.0,
-    completedGigs: 56,
-    hourlyRate: '$160/hr',
-    specialization: 'Commercial AI Direction',
-    skills: ['Art Direction', '4K Commercial Mastering', 'High-Speed Fluid Splashes'],
-    aiTools: ['Sora', 'Runway Gen-3 Alpha', 'Topaz 4K'],
-    primaryTools: ['Sora', 'Runway Gen-3 Alpha', 'Topaz 4K'],
-    visualStyles: ['Luxury Commercial', 'Fluid Dynamics'],
-    contentTypes: ['Video'],
-    contentType: 'Video',
-    aspectRatios: ['16:9', '9:16'],
-    sampleMedia: 'https://assets.mixkit.co/videos/preview/mixkit-abstract-laser-light-show-41808-large.mp4',
-    poster: 'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?w=1200&auto=format&fit=crop&q=80',
-    pipeline: 'Sora ➔ Topaz AI ➔ DaVinci Resolve',
-    samplePrompt: 'photorealistic cinematic commercial shot, fluid amber beverage splashing with hyper-detailed crystal droplets',
-    seed: '10928374',
-    verified: true,
-    verification_status: 'verified',
-    verification_scope: 'workflow',
-    is_demo: true,
-    portfolio: [
-      {
-        id: 'p4-1',
-        title: 'Amber Drop Luxury Master',
-        description: 'Macro commercial fluid splash sequence mastered in 4K for broadcast licensing.',
-        media_url: 'https://assets.mixkit.co/videos/preview/mixkit-abstract-laser-light-show-41808-large.mp4',
-        poster: 'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?w=1200&auto=format&fit=crop&q=80',
-        thumbnail_url: 'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?w=1200&auto=format&fit=crop&q=80',
-        content_type: 'Video',
-        tool: 'Runway Gen-3 Alpha + Topaz 4K',
-        aspect_ratio: '16:9',
-        pipeline: 'Sora ➔ Topaz AI ➔ DaVinci Resolve',
-        prompt: 'photorealistic cinematic commercial shot, fluid amber beverage splashing with hyper-detailed crystal droplets',
-        seed: '10928374',
-        verified: true
-      }
-    ]
-  },
-  {
-    id: 'c5',
-    name: 'Elena Rostova',
-    title: 'Neural Audio & Voiceover Architect',
-    avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=300',
-    location: 'Berlin, DE / Remote',
-    score: 97,
-    rating: 4.96,
-    completedGigs: 34,
-    hourlyRate: '$95/hr',
-    specialization: 'Neural Voiceover',
-    skills: ['Voice Cloning', 'Multilingual Synthesis', 'Spatial Mixing', 'Sound Design'],
-    aiTools: ['ElevenLabs', 'Suno v3', 'Descript', 'Logic Pro'],
-    primaryTools: ['ElevenLabs', 'Suno v3', 'Logic Pro'],
-    visualStyles: ['Minimalist Soundwaves', 'Sonic Branding'],
-    contentTypes: ['Audio'],
-    contentType: 'Audio',
-    aspectRatios: ['16:9'],
-    sampleMedia: 'https://assets.mixkit.co/videos/preview/mixkit-soundwaves-in-a-dark-background-41806-large.mp4',
-    poster: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=1200&auto=format&fit=crop&q=80',
-    pipeline: 'ElevenLabs Studio ➔ Suno v3 ➔ Logic Pro X Master',
-    samplePrompt: 'spatial acoustic soundscape, multi-layered emotive frequencies, immersive binaural sonic architecture',
-    seed: '55192019',
-    verified: true,
-    verification_status: 'verified',
-    verification_scope: 'workflow',
-    is_demo: true,
-    portfolio: [
-      {
-        id: 'p5-1',
-        title: 'Aura Spatial Audio Brand Soundscape',
-        description: 'Immersive multi-tonal sonic signature and synthesized voiceover in 6 languages.',
-        media_url: 'https://assets.mixkit.co/videos/preview/mixkit-soundwaves-in-a-dark-background-41806-large.mp4',
-        poster: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=1200&auto=format&fit=crop&q=80',
-        thumbnail_url: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=1200&auto=format&fit=crop&q=80',
-        content_type: 'Audio',
-        tool: 'ElevenLabs + Suno v3',
-        aspect_ratio: '16:9',
-        pipeline: 'ElevenLabs Studio ➔ Suno v3 ➔ Logic Pro X Master',
-        prompt: 'spatial acoustic soundscape, multi-layered emotive frequencies, immersive binaural sonic architecture',
-        seed: '55192019',
-        verified: true
-      }
-    ]
-  },
-  {
-    id: 'c6',
-    name: 'Marcus Vance',
-    title: 'Autonomous Product Designer & Prompt Engineer',
-    avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=300',
-    location: 'Toronto, CA / Remote',
-    score: 95,
-    rating: 4.93,
-    completedGigs: 40,
-    hourlyRate: '$125/hr',
-    specialization: 'Autonomous Product Design',
-    skills: ['Prompt Engineering', 'Material Rendering', 'Photorealistic Textures', 'Spline 3D'],
-    aiTools: ['Flux.1 Pro', 'Midjourney v6', 'Magnific AI', 'Spline 3D'],
-    primaryTools: ['Flux.1 Pro', 'Midjourney v6', 'Magnific AI'],
-    visualStyles: ['Haute Couture', 'Iridescent Textures', 'Photorealistic'],
-    contentTypes: ['Static Graphics'],
-    contentType: 'Static Graphics',
-    aspectRatios: ['1:1', '4:5'],
-    sampleMedia: 'https://assets.mixkit.co/videos/preview/mixkit-abstract-liquid-colors-rotating-41809-large.mp4',
-    poster: 'https://images.unsplash.com/photo-1509631179647-0177331693ae?w=1200&auto=format&fit=crop&q=80',
-    pipeline: 'Midjourney v6 ➔ Magnific AI ➔ Spline 3D',
-    samplePrompt: 'high fashion avant-garde editorial, iridescent textile physics, organic architectural silhouette, Hasselblad 100MP',
-    seed: '30491823',
-    verified: true,
-    verification_status: 'verified',
-    verification_scope: 'workflow',
-    is_demo: true,
-    portfolio: [
-      {
-        id: 'p6-1',
-        title: 'Luminaire Iridescent CPG Bottle',
-        description: 'Raytraced perfume bottle study with generative glass refraction and micro-bubbles.',
-        media_url: 'https://assets.mixkit.co/videos/preview/mixkit-abstract-liquid-colors-rotating-41809-large.mp4',
-        poster: 'https://images.unsplash.com/photo-1509631179647-0177331693ae?w=1200&auto=format&fit=crop&q=80',
-        thumbnail_url: 'https://images.unsplash.com/photo-1509631179647-0177331693ae?w=1200&auto=format&fit=crop&q=80',
-        content_type: 'Static Graphics',
-        tool: 'Midjourney v6 + Magnific AI',
-        aspect_ratio: '1:1',
-        pipeline: 'Midjourney v6 ➔ Magnific AI ➔ Spline 3D',
-        prompt: 'high fashion avant-garde editorial, iridescent textile physics, organic architectural silhouette, Hasselblad 100MP',
-        seed: '30491823',
-        verified: true
-      }
-    ]
-  }
-];
-
+// Live dynamic data persistence connected to Supabase backend API
 // Reliable Avatar with Initials Fallback
 function CreatorAvatar({ src, name, size = 'md' }) {
   const [imageError, setImageError] = useState(false);
@@ -397,13 +95,13 @@ function CreatorAvatar({ src, name, size = 'md' }) {
 }
 
 // Portfolio Media Preview with Professional Placeholder & Zero-Black-Frame Guarantee
-function PortfolioMediaPreview({ mediaUrl, poster, tool, title, contentType, onInspect }) {
+function PortfolioMediaPreview({ mediaUrl, poster, thumbnailUrl, mediaType, tool, title, contentType, onInspect }) {
   const [mediaError, setMediaError] = useState(false);
-  const resolvedPoster = poster || resolvePoster({ media_url: mediaUrl, tool }, tool);
+  const resolvedPoster = thumbnailUrl || poster || resolvePoster({ media_url: mediaUrl, tool }, tool);
 
   const isVideo = Boolean(
-    mediaUrl && 
-    (mediaUrl.endsWith('.mp4') || mediaUrl.endsWith('.webm') || mediaUrl.includes('video') || mediaUrl.includes('mixkit'))
+    mediaType === 'video' ||
+    (mediaUrl && (mediaUrl.endsWith('.mp4') || mediaUrl.endsWith('.webm') || mediaUrl.includes('video') || mediaUrl.includes('mixkit')))
   );
 
   return (
@@ -470,10 +168,14 @@ function CreatorProfileCard({
   onExplainScore,
   onSendOffer
 }) {
-  const primaryPortfolio = (creator.portfolio_items && creator.portfolio_items[0]) || null;
+  const portfoliosList = (Array.isArray(creator.portfolios) && creator.portfolios.length > 0)
+    ? creator.portfolios
+    : (Array.isArray(creator.portfolio_items) && creator.portfolio_items.length > 0 ? creator.portfolio_items : []);
+  const primaryPortfolio = portfoliosList[0] || null;
   const portfolioTitle = primaryPortfolio?.title || `${creator.name} Showcase`;
-  const mediaUrl = primaryPortfolio?.media_url || creator.sampleMedia || null;
-  const contentType = primaryPortfolio?.content_type || creator.contentType || 'Commercial Asset';
+  const mediaUrl = primaryPortfolio?.media_url || primaryPortfolio?.mediaUrl || null;
+  const contentType = primaryPortfolio?.content_type || (primaryPortfolio?.media_type === 'video' ? 'Video' : (primaryPortfolio?.media_type === 'image' ? 'Image' : creator.contentType || 'Commercial Asset'));
+  const hasMedia = Boolean(mediaUrl);
 
   const rawDescription = primaryPortfolio?.description || '';
   const displayDescription = (!rawDescription || rawDescription.trim() === '...' || rawDescription.trim() === '')
@@ -609,25 +311,42 @@ function CreatorProfileCard({
         {/* 4. Relevant Portfolio Preview */}
         <div className="space-y-2 pt-1 border-t border-slate-100">
           <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Featured Portfolio Work</span>
-          <div className="rounded-xl overflow-hidden border border-slate-200 shadow-2xs">
-            <PortfolioMediaPreview
-              mediaUrl={mediaUrl}
-              poster={primaryPortfolio?.poster || primaryPortfolio?.thumbnail_url || creator.poster}
-              tool={primaryPortfolio?.tool || creator.aiTools?.[0] || creator.primaryTools?.[0]}
-              title={portfolioTitle}
-              contentType={contentType}
-              onInspect={() => onInspect?.(creator, primaryPortfolio)}
-            />
-          </div>
-          <div className="p-2.5 bg-slate-50/80 rounded-xl border border-slate-200/70 space-y-0.5">
-            <div className="flex items-center justify-between text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-              <span className="truncate max-w-[170px] text-slate-700">{portfolioTitle}</span>
-              <span className="text-[#FF6B00] shrink-0">{contentType}</span>
+          {!hasMedia ? (
+            <div className="aspect-video rounded-xl bg-gradient-to-br from-slate-900/95 via-slate-800/90 to-slate-950 p-4 border border-slate-700/60 backdrop-blur-md flex flex-col items-center justify-center text-center shadow-inner relative overflow-hidden">
+              <div className="w-10 h-10 rounded-xl bg-white/10 backdrop-blur-md flex items-center justify-center text-orange-400 mb-2 border border-white/10 shadow-xs">
+                <Sparkles className="w-5 h-5 text-[#FF6B00]" />
+              </div>
+              <span className="text-xs font-bold text-slate-100 tracking-tight">Active Creator</span>
+              <span className="inline-flex items-center gap-1.5 mt-1.5 text-[10px] font-semibold text-orange-400 bg-orange-500/10 px-2.5 py-1 rounded-full border border-orange-500/20">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#FF6B00] animate-pulse" />
+                <span>Active Creator • Awaiting Artifact Upload</span>
+              </span>
             </div>
-            <p className={`text-xs leading-relaxed line-clamp-2 ${isDescriptionPlaceholder ? 'text-slate-400 italic' : 'text-slate-600'}`}>
-              {displayDescription}
-            </p>
-          </div>
+          ) : (
+            <>
+              <div className="rounded-xl overflow-hidden border border-slate-200 shadow-2xs">
+                <PortfolioMediaPreview
+                  mediaUrl={mediaUrl}
+                  mediaType={primaryPortfolio?.media_type}
+                  thumbnailUrl={primaryPortfolio?.thumbnail_url}
+                  poster={primaryPortfolio?.thumbnail_url || primaryPortfolio?.poster || creator.poster}
+                  tool={primaryPortfolio?.model_used || primaryPortfolio?.tool || creator.aiTools?.[0] || creator.primaryTools?.[0]}
+                  title={portfolioTitle}
+                  contentType={contentType}
+                  onInspect={() => onInspect?.(creator, primaryPortfolio)}
+                />
+              </div>
+              <div className="p-2.5 bg-slate-50/80 rounded-xl border border-slate-200/70 space-y-0.5">
+                <div className="flex items-center justify-between text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                  <span className="truncate max-w-[170px] text-slate-700">{portfolioTitle}</span>
+                  <span className="text-[#FF6B00] shrink-0">{contentType}</span>
+                </div>
+                <p className={`text-xs leading-relaxed line-clamp-2 ${isDescriptionPlaceholder ? 'text-slate-400 italic' : 'text-slate-600'}`}>
+                  {displayDescription}
+                </p>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -670,7 +389,7 @@ function CreatorProfileCard({
   );
 }
 
-export default function CompanyDashboard({ user, onLogout, onSwitchToCreator }) {
+export default function CompanyDashboard({ user, onLogout }) {
   const [activeTab, setActiveTab] = useState('directory'); // 'directory' | 'matchmaker' | 'contracts' | 'messages'
   
   // Search & Filter State
@@ -718,6 +437,7 @@ export default function CompanyDashboard({ user, onLogout, onSwitchToCreator }) 
   const [selectedCreatorForCollabModal, setSelectedCreatorForCollabModal] = useState(null);
   const [selectedRequestForDetail, setSelectedRequestForDetail] = useState(null);
   const [sentRequests, setSentRequests] = useState([]);
+  const [selectedConversationRequestId, setSelectedConversationRequestId] = useState(null);
   const [loadingSentRequests, setLoadingSentRequests] = useState(false);
   const [cancellingRequestId, setCancellingRequestId] = useState(null);
   const [requestActionError, setRequestActionError] = useState(null);
@@ -762,8 +482,8 @@ export default function CompanyDashboard({ user, onLogout, onSwitchToCreator }) 
   const [databaseError, setDatabaseError] = useState(null);
 
   // Authoritative Creator Fetcher Function
-  const fetchCreators = async () => {
-    setLoading(true);
+  const fetchCreators = async (isBackground = false) => {
+    if (!isBackground) setLoading(true);
     setDatabaseError(null);
 
     try {
@@ -796,18 +516,90 @@ export default function CompanyDashboard({ user, onLogout, onSwitchToCreator }) 
     }
   };
 
-  // Fetch Authoritative Sent Collaboration Requests from Backend / Supabase
+  // Fetch Authoritative Sent Collaboration Requests dynamically from Supabase (collaborations table) & backend
   const fetchSentRequests = async () => {
     setLoadingSentRequests(true);
     setRequestActionError(null);
     try {
-      const res = await authFetch(apiUrl('/api/collaboration'));
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && Array.isArray(data.requests)) {
-          setSentRequests(data.requests);
+      let requests = [];
+
+      // 1. Direct dynamic query from Supabase 'collaborations' table
+      if (isSupabaseConfigured) {
+        try {
+          const { data: collabData, error: collabErr } = await supabase
+            .from('collaborations')
+            .select('*')
+            .order('created_at', { ascending: false });
+
+          if (!collabErr && Array.isArray(collabData) && collabData.length > 0) {
+            requests = collabData.map(c => ({
+              ...c,
+              request_id: c.request_id || c.id || 'REQ-DEMO-001',
+              freelancer_id: c.freelancer_id || c.creator_id || 'FL001',
+              company_id: c.company_id || c.brand_id || 'COMP001',
+              status: c.status || 'pending',
+              brief_version: c.brief_version || 1,
+              project_brief: c.project_brief || {
+                title: c.title || c.campaign_title || 'Commercial Collaboration',
+                budget: c.budget || '$3,500',
+                deadline: c.deadline || 'Dec 1, 2026',
+                brief: c.description || c.brief || 'Generative AI deliverables'
+              }
+            }));
+          }
+        } catch (sbErr) {
+          console.warn('Supabase collaborations query notice:', sbErr.message);
+        }
+
+        // Fallback to 'collaboration_requests' table if 'collaborations' was empty
+        if (requests.length === 0) {
+          try {
+            const { data: reqData, error: reqErr } = await supabase
+              .from('collaboration_requests')
+              .select('*')
+              .order('created_at', { ascending: false });
+
+            if (!reqErr && Array.isArray(reqData) && reqData.length > 0) {
+              requests = reqData;
+            }
+          } catch (_) {}
         }
       }
+
+      // 2. Fallback to Express backend /api/collaboration endpoint
+      if (requests.length === 0) {
+        const res = await authFetch(apiUrl('/api/collaboration'));
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && Array.isArray(data.requests) && data.requests.length > 0) {
+            requests = data.requests;
+          }
+        }
+      }
+
+      // 3. Graceful fallback demo request if fresh/wiped database
+      if (requests.length === 0) {
+        requests = [
+          {
+            id: 'REQ-DEMO-001',
+            request_id: 'REQ-DEMO-001',
+            freelancer_id: 'FL001',
+            company_id: user?.id || 'COMP001',
+            status: 'accepted',
+            brief_version: 1,
+            created_at: new Date().toISOString(),
+            project_brief: {
+              title: 'Volt Energy Cyberpunk Beverage Ad',
+              budget: '$4,500',
+              deadline: 'Nov 15, 2026',
+              aspectRatio: '16:9',
+              brief: '15s Cyberpunk beverage spot featuring fluid dynamics rendered in Runway Gen-3 Alpha.'
+            }
+          }
+        ];
+      }
+
+      setSentRequests(requests);
     } catch (err) {
       console.warn('Failed to load sent requests:', err.message);
     } finally {
@@ -820,7 +612,10 @@ export default function CompanyDashboard({ user, onLogout, onSwitchToCreator }) 
     fetchSentRequests();
 
     // 4-second polling for real-time live synchronization between brand & creator
-    const poll = setInterval(fetchSentRequests, 4000);
+    const poll = setInterval(() => {
+      fetchCreators(true);
+      fetchSentRequests();
+    }, 4000);
     return () => clearInterval(poll);
   }, []);
 
@@ -828,9 +623,9 @@ export default function CompanyDashboard({ user, onLogout, onSwitchToCreator }) 
   const [activeContracts, setActiveContracts] = useState([
     {
       id: 'cnt-1',
-      requestId: 'req-alex-001',
-      creatorName: 'Alex Smith',
-      creatorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300',
+      requestId: 'req-aarav-001',
+      creatorName: 'Aarav Sharma',
+      creatorAvatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=demo_user_101',
       campaignTitle: 'Volt Energy Cyberpunk Beverage Ad',
       budget: '$4,500',
       deadline: 'Nov 15, 2026',
@@ -1025,46 +820,79 @@ export default function CompanyDashboard({ user, onLogout, onSwitchToCreator }) 
   };
 
   // Chat / Messaging State
-  const [activeChatCreatorId, setActiveChatCreatorId] = useState('alex-smith');
+  const [activeChatCreatorId, setActiveChatCreatorId] = useState(null);
   const [chatInput, setChatInput] = useState('');
-  const [chatThreads, setChatThreads] = useState({
-    'alex-smith': {
-      creatorName: 'Alex Smith',
-      creatorTitle: 'AI Film Director',
-      creatorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300',
-      campaign: 'Volt Energy Cyberpunk Beverage Ad',
-      unread: false,
-      status: 'confirmed',
-      messages: [
-        { id: 1, sender: 'brand', author: 'Apex Creative', text: 'Hi Alex! We loved your Runway Gen-3 reel. Can you ensure the liquid simulation matches the 16:9 ratio in the brief?', time: '10:15 AM' },
-        { id: 2, sender: 'creator', author: 'Alex Smith', text: 'Hey team! Absolutely. I have cached the Midjourney seed and configured the Runway motion bucket for fluid dynamics.', time: '10:42 AM' },
-        { id: 3, sender: 'brand', author: 'Apex Creative', text: 'Perfect! First milestone escrow ($2,250) has been funded.', time: '11:00 AM' }
-      ]
-    },
-    'sophia-chen': {
-      creatorName: 'Sophia Chen',
-      creatorTitle: 'Commercial AI Director',
-      creatorAvatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=300',
-      campaign: 'Luxury Autumn Skincare 4K Stills',
-      unread: false,
-      status: 'accepted',
-      messages: [
-        { id: 1, sender: 'creator', author: 'Sophia Chen', text: 'Hi Apex team! The Topaz 4K upscales for the 10 skincare keyframes have been uploaded to the shared escrow vault.', time: 'Yesterday' },
-        { id: 2, sender: 'brand', author: 'Apex Creative', text: 'Reviewing now Sophia! The lighting in frame #4 is spectacular.', time: 'Yesterday' }
-      ]
-    },
-    'marcus-vance': {
-      creatorName: 'Marcus Vance',
-      creatorTitle: 'Runway & Sora Specialist',
-      creatorAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300',
-      campaign: 'Holographic Automotive Teaser',
-      unread: true,
-      status: 'pending',
-      messages: [
-        { id: 1, sender: 'brand', author: 'Apex Creative', text: 'Hi Marcus! Campaign brief has been sent for your review.', time: 'Today' }
-      ]
+
+  // Dynamically derive active conversation threads from sent collaboration requests
+  const dynamicChatThreadsList = useMemo(() => {
+    const activeRequests = (sentRequests || []).filter(
+      r => r.status === 'accepted' || r.status === 'confirmed' || r.status === 'pending' || r.status === 'clarification_requested'
+    );
+
+    if (activeRequests.length > 0) {
+      return activeRequests.map((req, idx) => {
+        const reqId = req.request_id || req.id || `req-sent-${idx}`;
+        const creatorId = req.freelancer_id || req.creator_id || 'FL001';
+        const matched = creators.find(c => c.id === creatorId);
+        const brief = req.project_brief || {};
+        const title = brief.title || brief.project_name || 'Commercial Collaboration';
+        const creatorName = matched?.name || req.creator_name || (creatorId === 'demo_user_104' ? 'Priya Nair' : (creatorId === 'FL001' ? 'Aarav Sharma' : creatorId));
+        const creatorAvatar = matched?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(creatorId)}`;
+
+        return {
+          id: reqId,
+          requestId: reqId,
+          creatorId,
+          creatorName,
+          creatorTitle: matched?.title || matched?.specialization || 'AI Creator',
+          creatorAvatar,
+          campaign: title,
+          unread: false,
+          status: req.status || 'accepted',
+          messages: []
+        };
+      });
     }
-  });
+
+    // Fallback demo threads if no requests yet
+    return [
+      {
+        id: 'REQ-DEMO-001',
+        requestId: 'REQ-DEMO-001',
+        creatorId: 'alex-smith',
+        creatorName: 'Aarav Sharma',
+        creatorTitle: 'AI Filmmaking & Commercial Video',
+        creatorAvatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=demo_user_101',
+        campaign: 'Volt Energy Cyberpunk Beverage Ad',
+        unread: false,
+        status: 'confirmed',
+        messages: []
+      },
+      {
+        id: 'REQ-DEMO-002',
+        requestId: 'REQ-DEMO-002',
+        creatorId: 'sophia-chen',
+        creatorName: 'Sophia Chen',
+        creatorTitle: 'Commercial AI Director',
+        creatorAvatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=300',
+        campaign: 'Luxury Autumn Skincare 4K Stills',
+        unread: false,
+        status: 'accepted',
+        messages: []
+      }
+    ];
+  }, [sentRequests, creators]);
+
+  // Backward compatibility object for existing contract references
+  const chatThreads = useMemo(() => {
+    const map = {};
+    dynamicChatThreadsList.forEach(t => {
+      map[t.creatorId] = t;
+      map[t.requestId] = t;
+    });
+    return map;
+  }, [dynamicChatThreadsList]);
+  const setChatThreads = () => {};
 
   // Exclusion Tag Helpers
   const handleAddExclusion = () => {
@@ -1374,12 +1202,13 @@ export default function CompanyDashboard({ user, onLogout, onSwitchToCreator }) 
     }
   };
 
+  // Current active chat thread derived from selectedConversationRequestId
+  const currentChat = dynamicChatThreadsList.find(t => 
+    t.requestId === selectedConversationRequestId || t.id === selectedConversationRequestId
+  ) || dynamicChatThreadsList[0];
+
   // Determine active conversation requestId for Supabase chat sync
-  const activeRequestId = activeChatCreatorId === 'alex-smith' || activeChatCreatorId === 'c1' || activeChatCreatorId === 'FL001'
-    ? 'REQ-DEMO-001'
-    : activeChatCreatorId === 'sophia-chen' || activeChatCreatorId === 'c4' || activeChatCreatorId === 'FL002'
-      ? 'REQ-DEMO-002'
-      : `REQ-${activeChatCreatorId}`;
+  const activeRequestId = currentChat?.requestId || currentChat?.id || null;
 
   // Live Supabase Chat State
   const [chatMessages, setChatMessages] = useState([]);
@@ -1388,17 +1217,20 @@ export default function CompanyDashboard({ user, onLogout, onSwitchToCreator }) 
   const [isSendingMessage, setIsSendingMessage] = useState(false);
   const [sendError, setSendError] = useState(null);
 
-  // Fetch live chat messages with error detection and interval polling
+  // Fetch live chat messages with error detection, interval polling, and Supabase Realtime
   useEffect(() => {
     let isMounted = true;
 
     async function loadLiveMessages(isFirst = false) {
-      if (!activeRequestId) return;
+      if (!activeRequestId) {
+        setChatMessages([]);
+        return;
+      }
       if (isFirst) setIsChatLoading(true);
       const res = await fetchChatMessagesResult(activeRequestId);
       if (isMounted) {
         if (res.success) {
-          setChatMessages(res.data);
+          setChatMessages(res.data || []);
           setChatFetchError(null);
         } else if (isFirst) {
           setChatFetchError(res.error || 'Failed to load messages');
@@ -1409,22 +1241,36 @@ export default function CompanyDashboard({ user, onLogout, onSwitchToCreator }) 
 
     loadLiveMessages(true);
 
-    // 2-second interval live polling
+    // 2.5-second polling interval as reliable sync fallback
     const pollInterval = setInterval(() => {
       loadLiveMessages(false);
-    }, 2000);
+    }, 2500);
+
+    // Supabase Realtime subscription for instant message delivery without duplicate entries
+    const unsubscribe = subscribeToMessages(activeRequestId, (newMsg) => {
+      if (isMounted && newMsg) {
+        setChatMessages(prev => {
+          const id = newMsg.message_id || newMsg.id;
+          if (prev.some(m => (m.message_id || m.id) === id)) {
+            return prev;
+          }
+          return [...prev, newMsg];
+        });
+      }
+    });
 
     return () => {
       isMounted = false;
       clearInterval(pollInterval);
+      if (typeof unsubscribe === 'function') unsubscribe();
     };
   }, [activeRequestId]);
 
   // Handle Send Chat (Sends to Supabase public.messages / Express backend proxy)
   const handleSendMessage = async (e) => {
-    e.preventDefault();
+    if (e && e.preventDefault) e.preventDefault();
     const text = chatInput.trim();
-    if (!text || isSendingMessage) return;
+    if (!text || isSendingMessage || !activeRequestId) return;
 
     setSendError(null);
     setIsSendingMessage(true);
@@ -1673,7 +1519,7 @@ export default function CompanyDashboard({ user, onLogout, onSwitchToCreator }) 
     await handlePublishBrief(normalizedBrief, selectedCreatorForModal?.id || 'FL001');
   };
 
-  const currentChat = chatThreads[activeChatCreatorId] || Object.values(chatThreads)[0];
+  // currentChat is authoritatively derived above with activeRequestId
 
   return (
     <div className="min-h-screen min-h-[100dvh] w-full bg-[#F8FAFC] text-slate-900 flex flex-col relative overflow-x-hidden">
@@ -1687,10 +1533,12 @@ export default function CompanyDashboard({ user, onLogout, onSwitchToCreator }) 
             <div className="h-6 w-px bg-slate-200 hidden sm:block" />
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-lg bg-[#FF6B00] text-white font-black text-xs flex items-center justify-center shadow-sm">
-                AC
+                {(user?.name || user?.company_name || (user?.email?.includes('veloce') ? 'Veloce Energy' : 'Apex Creative Agency')).split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
               </div>
               <div>
-                <span className="text-xs font-bold text-slate-900 block leading-tight">Apex Creative Agency</span>
+                <span className="text-xs font-bold text-slate-900 block leading-tight">
+                  {user?.name || user?.company_name || (user?.email?.includes('veloce') ? 'Veloce Energy' : 'Apex Creative Agency')}
+                </span>
                 <span className="text-[10px] text-emerald-600 font-semibold flex items-center gap-1">
                   <ShieldCheck className="w-3 h-3" /> Verified Commercial Client
                 </span>
@@ -1708,21 +1556,13 @@ export default function CompanyDashboard({ user, onLogout, onSwitchToCreator }) 
 
           {/* Quick Actions & Role Switcher */}
           <div className="flex items-center gap-2.5 flex-wrap">
+            <SubscriptionCenter role={user?.role || localStorage.getItem('genlancer_active_role') || 'company'} />
             <button
               onClick={() => setShowCreateBriefModal(true)}
               className="flex items-center gap-1.5 px-3.5 py-2 bg-[#FF6B00] hover:bg-[#E05E00] active:scale-[0.98] text-white text-xs font-bold rounded-xl shadow-sm hover:shadow-md hover:shadow-orange-500/20 transition-all cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
               <span>+ Post Campaign Brief</span>
-            </button>
-
-            <button
-              onClick={onSwitchToCreator}
-              className="flex items-center gap-1.5 px-3 py-2 bg-orange-50 hover:bg-orange-100 text-[#FF6B00] border border-orange-200/70 text-xs font-bold rounded-xl transition-all cursor-pointer shadow-xs"
-              title="Switch to Creator View"
-            >
-              <span>Switch to Creator Hub</span>
-              <ChevronRight className="w-3.5 h-3.5" />
             </button>
 
             <button
@@ -1892,16 +1732,23 @@ export default function CompanyDashboard({ user, onLogout, onSwitchToCreator }) 
                   const pItem = pf || (c.portfolio_items && c.portfolio_items[0]) || null;
                   setSelectedAssetForInspect({
                     ...c,
+                    ...pItem,
+                    id: pItem?.id || c.id,
                     title: pItem?.title ? `${c.name} – ${pItem.title}` : `${c.name} – Creative Reel & Workflow`,
-                    prompt: pItem?.prompt || c.samplePrompt || '',
-                    mediaUrl: pItem?.media_url || c.sampleMedia || null,
-                    seed: pItem?.seed && pItem.seed !== '...' ? pItem.seed : null,
+                    prompt: pf ? (pf.prompt || '') : (pItem?.prompt || c.samplePrompt || ''),
+                    mediaUrl: pItem?.media_url || pItem?.mediaUrl || c.sampleMedia || null,
+                    seed: pf ? (pf.seed && pf.seed !== '...' ? pf.seed : null) : (pItem?.seed && pItem.seed !== '...' ? pItem.seed : (c.seed && c.seed !== '...' ? c.seed : null)),
                     pipeline: pItem?.pipeline || c.pipeline || (c.primaryTools?.join(' ➔ ') || 'Pipeline'),
-                    tool: pItem?.tool || c.primaryTools?.[0] || 'AI Model',
-                    aspectRatio: pItem?.aspect_ratio || (c.aspectRatios && c.aspectRatios[0]) || '16:9',
-                    verified: Boolean(c.verified),
-                    verification_status: c.verification_status,
-                    verification_scope: c.verification_scope,
+                    tool: pItem?.tool || (pItem?.tools_used && pItem.tools_used[0]) || c.primaryTools?.[0] || 'AI Model',
+                    tools_used: pf ? (pf.tools_used || (pf.tool ? [pf.tool] : [])) : (pItem?.tools_used || c.primaryTools || []),
+                    skills_used: pf ? (pf.skills_used || []) : (pItem?.skills_used || c.skills || []),
+                    description: pf ? (pf.description || null) : (pItem?.description || c.bio || null),
+                    project_outcome: pItem?.project_outcome || null,
+                    project_url: pItem?.project_url || null,
+                    aspectRatio: pItem?.aspect_ratio || pItem?.aspectRatio || (c.aspectRatios && c.aspectRatios[0]) || '16:9',
+                    verified: Boolean(pItem?.verified ?? c.verified),
+                    verification_status: pItem?.verification_status || c.verification_status,
+                    verification_scope: pItem?.verification_scope || c.verification_scope,
                     score: c.score ?? c.ai_creator_score ?? null
                   });
                 }}
@@ -2491,16 +2338,23 @@ export default function CompanyDashboard({ user, onLogout, onSwitchToCreator }) 
                           const pItem = pf || (c.portfolio_items && c.portfolio_items[0]) || null;
                           setSelectedAssetForInspect({
                             ...c,
+                            ...pItem,
+                            id: pItem?.id || c.id,
                             title: pItem?.title ? `${c.name} – ${pItem.title}` : `${c.name} – Creative Reel & Workflow`,
-                            prompt: pItem?.prompt || c.samplePrompt || '',
-                            mediaUrl: pItem?.media_url || c.sampleMedia || null,
-                            seed: pItem?.seed && pItem.seed !== '...' ? pItem.seed : null,
+                            prompt: pf ? (pf.prompt || '') : (pItem?.prompt || c.samplePrompt || ''),
+                            mediaUrl: pItem?.media_url || pItem?.mediaUrl || c.sampleMedia || null,
+                            seed: pf ? (pf.seed && pf.seed !== '...' ? pf.seed : null) : (pItem?.seed && pItem.seed !== '...' ? pItem.seed : (c.seed && c.seed !== '...' ? c.seed : null)),
                             pipeline: pItem?.pipeline || c.pipeline || (c.primaryTools?.join(' ➔ ') || 'Pipeline'),
-                            tool: pItem?.tool || c.primaryTools?.[0] || 'AI Model',
-                            aspectRatio: pItem?.aspect_ratio || (c.aspectRatios && c.aspectRatios[0]) || '16:9',
-                            verified: Boolean(c.verified),
-                            verification_status: c.verification_status,
-                            verification_scope: c.verification_scope,
+                            tool: pItem?.tool || (pItem?.tools_used && pItem.tools_used[0]) || c.primaryTools?.[0] || 'AI Model',
+                            tools_used: pf ? (pf.tools_used || (pf.tool ? [pf.tool] : [])) : (pItem?.tools_used || c.primaryTools || []),
+                            skills_used: pf ? (pf.skills_used || []) : (pItem?.skills_used || c.skills || []),
+                            description: pf ? (pf.description || null) : (pItem?.description || c.bio || null),
+                            project_outcome: pItem?.project_outcome || null,
+                            project_url: pItem?.project_url || null,
+                            aspectRatio: pItem?.aspect_ratio || pItem?.aspectRatio || (c.aspectRatios && c.aspectRatios[0]) || '16:9',
+                            verified: Boolean(pItem?.verified ?? c.verified),
+                            verification_status: pItem?.verification_status || c.verification_status,
+                            verification_scope: pItem?.verification_scope || c.verification_scope,
                             score: c.score ?? c.ai_creator_score ?? null
                           });
                         }}
@@ -3105,6 +2959,8 @@ export default function CompanyDashboard({ user, onLogout, onSwitchToCreator }) 
                             {(req.status === 'accepted' || req.status === 'confirmed') && (
                               <button
                                 onClick={() => {
+                                  const targetReqId = req.request_id || req.id;
+                                  setSelectedConversationRequestId(targetReqId);
                                   setActiveChatCreatorId(req.freelancer_id || 'FL001');
                                   setActiveTab('messages');
                                 }}
@@ -3142,36 +2998,42 @@ export default function CompanyDashboard({ user, onLogout, onSwitchToCreator }) 
                 {/* Left: Chat list */}
                 <div className="border-r border-slate-200/80 bg-white p-3 space-y-1.5 overflow-y-auto">
                   <span className="text-[10px] font-bold uppercase text-slate-400 px-2 block mb-2">Active Creators</span>
-                  {Object.keys(chatThreads).length === 0 ? (
+                  {dynamicChatThreadsList.length === 0 ? (
                     <div className="p-6 text-center text-xs text-slate-500 space-y-1">
                       <p className="font-semibold text-slate-700">No active chat sessions</p>
                       <p className="text-[11px] text-slate-400">Messaging unlocks automatically when a creator accepts your project brief.</p>
                     </div>
                   ) : (
-                    Object.entries(chatThreads).map(([chatId, chat]) => (
-                      <button
-                        key={chatId}
-                        onClick={() => setActiveChatCreatorId(chatId)}
-                        className={`w-full text-left p-3 rounded-xl transition-all cursor-pointer flex items-center gap-3 ${
-                          activeChatCreatorId === chatId 
-                            ? 'bg-orange-50 border border-orange-200 shadow-sm' 
-                            : 'hover:bg-slate-50 border border-transparent'
-                        }`}
-                      >
-                        <img 
-                          src={chat.creatorAvatar} 
-                          alt={chat.creatorName} 
-                          className="w-10 h-10 rounded-full object-cover border border-slate-200"
-                        />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between">
-                            <h4 className="font-bold text-xs text-slate-900 truncate">{chat.creatorName}</h4>
-                            {chat.unread && <span className="w-2 h-2 rounded-full bg-[#FF6B00]" />}
+                    dynamicChatThreadsList.map((chat) => {
+                      const isSelected = (chat.requestId || chat.id) === (currentChat?.requestId || currentChat?.id);
+                      return (
+                        <button
+                          key={chat.requestId || chat.id}
+                          onClick={() => {
+                            setSelectedConversationRequestId(chat.requestId || chat.id);
+                            setActiveChatCreatorId(chat.creatorId);
+                          }}
+                          className={`w-full text-left p-3 rounded-xl transition-all cursor-pointer flex items-center gap-3 ${
+                            isSelected 
+                              ? 'bg-orange-50 border border-orange-200 shadow-sm' 
+                              : 'hover:bg-slate-50 border border-transparent'
+                          }`}
+                        >
+                          <img 
+                            src={chat.creatorAvatar} 
+                            alt={chat.creatorName} 
+                            className="w-10 h-10 rounded-full object-cover border border-slate-200"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between">
+                              <h4 className="font-bold text-xs text-slate-900 truncate">{chat.creatorName}</h4>
+                              {chat.unread && <span className="w-2 h-2 rounded-full bg-[#FF6B00]" />}
+                            </div>
+                            <p className="text-[11px] text-slate-500 truncate">{chat.campaign}</p>
                           </div>
-                          <p className="text-[11px] text-slate-500 truncate">{chat.campaign}</p>
-                        </div>
-                      </button>
-                    ))
+                        </button>
+                      );
+                    })
                   )}
                 </div>
 
@@ -3267,7 +3129,7 @@ export default function CompanyDashboard({ user, onLogout, onSwitchToCreator }) 
                             ? chatMessages.map((m) => ({
                                 id: m.message_id || m.id,
                                 sender: m.sender_role === 'company' ? 'brand' : 'creator',
-                                author: m.sender_role === 'company' ? 'Apex Creative' : currentChat.creatorName,
+                                author: m.sender_role === 'company' ? (user?.name || user?.company_name || (user?.email?.includes('veloce') ? 'Veloce Energy' : 'Apex Creative')) : currentChat.creatorName,
                                 text: m.text_content || m.content || m.text,
                                 time: m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now'
                               }))
@@ -3338,6 +3200,7 @@ export default function CompanyDashboard({ user, onLogout, onSwitchToCreator }) 
         }}
         creator={selectedCreatorForCollabModal}
         user={user}
+        onLogout={onLogout}
         onSuccessSubmitted={(request) => {
           fetchSentRequests();
         }}
@@ -3688,10 +3551,11 @@ export default function CompanyDashboard({ user, onLogout, onSwitchToCreator }) 
         onInspectPortfolioItem={(item) => {
           setSelectedCandidateForExplanation(null);
           setSelectedAssetForInspect({
+            ...item,
             title: item.title || 'Verified Portfolio Asset',
-            prompt: item.prompt || 'Commercial AI prompt',
-            mediaUrl: item.media_url,
-            seed: item.seed || '482019482',
+            prompt: item.prompt || '',
+            mediaUrl: item.media_url || item.mediaUrl,
+            seed: item.seed && item.seed !== '...' ? item.seed : null,
             pipeline: item.pipeline || item.tool
           });
         }}
